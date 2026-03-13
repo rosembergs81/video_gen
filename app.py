@@ -201,22 +201,35 @@ def _run_pipe(pipe, mode, prompt, negative, input_image,
         return callback_kwargs
 
     if mode == "t2v":
+        # Force dimensions to be divisible by 32 for LTX
+        w_t2v = (width // 32) * 32
+        h_t2v = (height // 32) * 32
         return pipe(
             prompt=prompt, negative_prompt=negative or None,
             num_frames=num_frames, guidance_scale=guidance,
             num_inference_steps=steps,
-            width=width, height=height, generator=gen,
+            width=w_t2v, height=h_t2v, generator=gen,
             callback_on_step_end=step_callback,
         ).frames[0]
     else:
         img = Image.fromarray(input_image).convert("RGB")
         w, h = img.size
+        # For LTX, ensure the scaled dimensions are strictly divisible by 32, not 8.
+        # Original: int(w*sc)//8*8, we change it to 32.
         sc = 720 / max(w, h)
-        img = img.resize((int(w*sc)//8*8, int(h*sc)//8*8), Image.LANCZOS)
+        w_scaled = (int(w * sc) // 32) * 32
+        h_scaled = (int(h * sc) // 32) * 32
+        
+        # Prevent 0 dimension error if image aspect ratio is extreme
+        w_scaled = max(32, w_scaled)
+        h_scaled = max(32, h_scaled)
+        
+        img = img.resize((w_scaled, h_scaled), Image.LANCZOS)
         return pipe(
             image=img, prompt=prompt, negative_prompt=negative or None,
             num_frames=num_frames, guidance_scale=guidance,
             num_inference_steps=steps, generator=gen,
+            height=h_scaled, width=w_scaled,
             callback_on_step_end=step_callback,
         ).frames[0]
 
