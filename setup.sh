@@ -53,9 +53,8 @@ fi
 echo "  ✅ Entorno listo en /workspace/venv"
 
 # ── 3. PyTorch con CUDA ───────────────────────
-echo "[3/6] Instalando PyTorch + CUDA…"
-pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121 -q
-echo "  ✅ PyTorch instalado"
+# Omitido: La imagen Docker de Vast.ai ya incluye PyTorch+CUDA por defecto.
+echo "[3/6] Omitiendo instalacion de PyTorch (Incluido en imagen Vast.ai)..."
 
 # ── 4. Dependencias del proyecto ──────────────
 echo "[4/6] Instalando dependencias…"
