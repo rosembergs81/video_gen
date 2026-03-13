@@ -653,6 +653,195 @@ def generate_video(
     )
     return out_path, info, val_report
 
+
+# ─────────────────────────────────────────────────────────────────────────────
+# STORY MODE — Multi-scene chained generation with visual continuity
+# ─────────────────────────────────────────────────────────────────────────────
+
+# I2V models available for continuity chaining
+_I2V_CONTINUITY_MODELS = {
+    "CogVideoX-5B-I2V (Img→Vid)": {
+        "repo": "THUDM/CogVideoX-5b-I2V",
+        "pipeline": "CogVideoXImageToVideoPipeline",
+    },
+}
+
+def _get_i2v_pipe(progress=None):
+    """Load the I2V pipeline for story continuity chaining."""
+    return _load_pipeline("CogVideoX-5B-I2V (Img→Vid)", progress=progress)
+
+
+def generate_story(
+    story_script,
+    negative_preset,
+    lighting, cinematography, quality, atmosphere, genre,
+    frames_per_scene, fps, guidance, steps, seed,
+    crossfade_frames,
+    reference_image,
+    progress=gr.Progress(track_tqdm=False),
+):
+    """
+    Generate a multi-scene story video with visual continuity.
+    
+    Strategy:
+    - Scene 1: Generated with T2V (CogVideoX-5B) or from reference image with I2V.
+    - Scene 2+: The LAST FRAME of the previous scene is used as the INPUT IMAGE
+      for CogVideoX-5B-I2V, ensuring the character's appearance, colors, and 
+      environment carry over naturally.
+    - All scenes are crossfaded together for smooth transitions.
+    """
+    if not story_script or not story_script.strip():
+        raise gr.Error("⚠️ El guión no puede estar vacío.")
+
+    # Parse scenes — one per line, skip empty lines and comments
+    scenes = []
+    for line in story_script.strip().split("\n"):
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        # Remove leading scene number if present (e.g., "1. " or "1: ")
+        import re
+        line = re.sub(r"^\d+[\.\:\)\-]\s*", "", line)
+        if line:
+            scenes.append(line)
+
+    if not scenes:
+        raise gr.Error("⚠️ No se encontraron escenas en el guión.")
+    if len(scenes) > 20:
+        raise gr.Error("⚠️ Máximo 20 escenas por historia.")
+
+    negative = _enhancer.get_negative(negative_preset)
+    seg_frames = int(frames_per_scene)
+    # CogVideoX requires (N*8)+1 frames
+    seg_frames = (seg_frames // 8) * 8 + 1
+
+    gen = (torch.Generator("cuda").manual_seed(int(seed))
+           if int(seed) != -1 else None)
+
+    t0 = time.time()
+    all_segments = []
+    last_frame_pil = None
+    scene_log = []
+
+    # If user provided a reference image, use it as the seed for scene 1
+    if reference_image is not None:
+        last_frame_pil = Image.fromarray(reference_image).convert("RGB")
+
+    for i, scene_prompt in enumerate(scenes):
+        prog_base = i / len(scenes)
+        progress(prog_base, desc=f"🎬 Escena {i+1}/{len(scenes)}: Preparando...")
+
+        # Enhance the prompt
+        enhanced = _enhancer.enhance(
+            base=scene_prompt,
+            lighting=None if lighting == "—" else lighting,
+            cinematography=None if cinematography == "—" else cinematography,
+            quality=None if quality == "—" else quality,
+            atmosphere=None if atmosphere == "—" else atmosphere,
+            genre=None if genre == "—" else genre,
+        )
+        # Truncate to safe token length
+        words = enhanced.split()
+        if len(words) > 200:
+            enhanced = " ".join(words[:200])
+
+        scene_log.append(f"`{i+1}.` {enhanced[:100]}{'…' if len(enhanced) > 100 else ''}")
+
+        if i == 0 and last_frame_pil is None:
+            # ── SCENE 1 (Text-to-Video) ──────────────────────────────────
+            progress(prog_base + 0.02, desc=f"🎬 Escena 1/{len(scenes)}: Generando con T2V...")
+            pipe_t2v = _load_pipeline("CogVideoX-5B (T2V)", progress=progress)
+
+            def step_cb_t2v(pipe_cls, step, timestep, cb_kwargs):
+                progress(prog_base, desc=f"⏳ Escena {i+1}: Paso {step+1}/{steps}...")
+                return cb_kwargs
+
+            frames = pipe_t2v(
+                prompt=enhanced, negative_prompt=negative or None,
+                num_frames=seg_frames, guidance_scale=guidance,
+                num_inference_steps=steps, generator=gen,
+                callback_on_step_end=step_cb_t2v,
+            ).frames[0]
+
+        else:
+            # ── SCENE 2+ (Image-to-Video for continuity) ─────────────────
+            progress(prog_base + 0.02,
+                     desc=f"🎬 Escena {i+1}/{len(scenes)}: Generando con I2V (continuidad)...")
+
+            pipe_i2v = _get_i2v_pipe(progress=progress)
+
+            # Use last frame from previous scene as seed image
+            seed_img = last_frame_pil.resize((720, 480), Image.LANCZOS)
+
+            def step_cb_i2v(pipe_cls, step, timestep, cb_kwargs):
+                progress(prog_base, desc=f"⏳ Escena {i+1}: Paso {step+1}/{steps}...")
+                return cb_kwargs
+
+            frames = pipe_i2v(
+                image=seed_img,
+                prompt=enhanced, negative_prompt=negative or None,
+                num_frames=seg_frames, guidance_scale=guidance,
+                num_inference_steps=steps, generator=gen,
+                callback_on_step_end=step_cb_i2v,
+            ).frames[0]
+
+        # Convert frames to list and save last frame for next scene
+        frame_list = list(frames)
+        all_segments.append(frame_list)
+
+        # Extract last frame as PIL for next scene's I2V input
+        last_raw = frame_list[-1]
+        if isinstance(last_raw, Image.Image):
+            last_frame_pil = last_raw
+        else:
+            last_frame_pil = Image.fromarray(last_raw)
+
+    # ── Crossfade all segments ────────────────────────────────────────────────
+    cf = int(crossfade_frames) if crossfade_frames else 4
+    if cf > 0 and len(all_segments) > 1:
+        progress(0.92, desc="🔀 Aplicando crossfade entre escenas...")
+        final_frames = _crossfade_segments(all_segments, overlap_frames=cf)
+    else:
+        final_frames = [f for seg in all_segments for f in seg]
+
+    # ── Export ────────────────────────────────────────────────────────────────
+    progress(0.95, desc="💾 Exportando historia completa...")
+    out_path = _frames_to_mp4(final_frames, fps=int(fps))
+    elapsed = time.time() - t0
+
+    # ── Save to DB ────────────────────────────────────────────────────────────
+    _db.save_generation(GenerationRecord(
+        model="Story Mode (T2V→I2V chain)",
+        prompt=story_script[:500],
+        negative=negative,
+        params=dict(
+            frames_per_scene=int(frames_per_scene), fps=int(fps),
+            guidance=guidance, steps=steps,
+            seed=int(seed), total_scenes=len(scenes),
+            crossfade=cf,
+        ),
+        loras=[],
+        motion_tags=dict(
+            lighting=lighting, cinematography=cinematography,
+            quality=quality, atmosphere=atmosphere, genre=genre,
+        ),
+        output_path=out_path,
+        duration_s=elapsed,
+        frame_count=len(final_frames),
+    ))
+
+    # ── Build info ────────────────────────────────────────────────────────────
+    total_secs = len(final_frames) / max(1, int(fps))
+    info = (
+        f"✅ **Historia generada:** {len(scenes)} escenas · "
+        f"**{len(final_frames)} frames** · **{total_secs:.1f}s** de video · "
+        f"generado en **{elapsed:.1f}s**\n\n"
+        f"**Escenas procesadas:**\n" +
+        "\n".join(scene_log) +
+        f"\n\n📁 `{out_path}`"
+    )
+    return out_path, info
+
 # ─────────────────────────────────────────────────────────────────────────────
 # LoRA manager
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1412,6 +1601,114 @@ correspondientes en cada frame. Soporta esqueletos: `human`, `quadruped`, `bird`
                 # Initialize gallery on load
                 demo.load(populate_gallery, outputs=[gallery_videos, cmp_gen_1, cmp_gen_2])
 
+            # ══════════════════════════════════════════════════════════════
+            # TAB 9 — STORY MODE
+            # ══════════════════════════════════════════════════════════════
+            with gr.Tab("📖 Story Mode"):
+                gr.Markdown("""
+### 📖 Story Mode — Genera historias completas con continuidad visual
+
+Escribe un **guión** con una escena por línea. El sistema generará automáticamente:
+1. **Escena 1** usando Text-to-Video (CogVideoX-5B), o desde tu imagen de referencia con I2V.
+2. **Escenas 2+** usando el **último frame de la escena anterior** como input de I2V, 
+   garantizando que los personajes, colores y entorno se mantengan consistentes.
+3. **Crossfade** suave entre todas las escenas para transiciones cinematográficas.
+
+> **💡 Tip:** Si quieres que tu personaje se vea EXACTAMENTE igual en todas las escenas, 
+> sube una **imagen de referencia** del personaje. La primera escena la generará a partir 
+> de esa imagen, y cada escena siguiente heredará la apariencia visual.
+                """)
+
+                with gr.Row(equal_height=False):
+                    # ── LEFT: Script & Settings ───────────────────────────
+                    with gr.Column(scale=1, min_width=420):
+                        story_script = gr.Textbox(
+                            label="📝 Guión (una escena por línea)",
+                            placeholder=(
+                                "# Ejemplo: La Princesa y el Dragón\n"
+                                "1. A beautiful princess with long silver hair walks through a dark enchanted forest at twilight\n"
+                                "2. She discovers a hidden cave entrance glowing with blue crystals\n"
+                                "3. Inside the cave, a massive friendly dragon sleeps peacefully\n"
+                                "4. The dragon opens its golden eyes and looks at the princess curiously\n"
+                                "5. The princess smiles and gently touches the dragon's nose\n"
+                                "6. The dragon and princess fly together above the clouds at sunset"
+                            ),
+                            lines=12,
+                        )
+
+                        with gr.Accordion("🖼️ Imagen de Referencia (opcional)", open=False):
+                            story_ref_image = gr.Image(
+                                label="Imagen del personaje principal",
+                                type="numpy",
+                            )
+                            gr.Markdown(
+                                "Sube una imagen del personaje principal. La primera escena "
+                                "se generará a partir de esta imagen usando I2V, asegurando "
+                                "que su apariencia sea consistente en toda la historia.\n\n"
+                                "**Sin imagen:** La escena 1 se genera con T2V (texto puro)."
+                            )
+
+                        with gr.Accordion("✨ Estilo Cinematográfico", open=False):
+                            with gr.Row():
+                                story_lighting = gr.Dropdown(
+                                    LIGHTING_OPTIONS, value="—", label="💡 Iluminación")
+                                story_cinematography = gr.Dropdown(
+                                    CINEMATOGRAPHY_OPTIONS, value="—", label="🎥 Cinematografía")
+                            with gr.Row():
+                                story_quality = gr.Dropdown(
+                                    QUALITY_OPTIONS, value="—", label="⭐ Calidad")
+                                story_atmosphere = gr.Dropdown(
+                                    ATMOSPHERE_OPTIONS, value="—", label="🌫️ Atmósfera")
+                            with gr.Row():
+                                story_genre = gr.Dropdown(
+                                    GENRE_OPTIONS, value="—", label="🎭 Género")
+                                story_negative = gr.Dropdown(
+                                    NEGATIVE_PRESETS_LIST, value="standard", label="🚫 Negative")
+
+                        with gr.Accordion("⚙️ Parámetros de Generación", open=False):
+                            with gr.Row():
+                                story_frames = gr.Slider(
+                                    8, 49, 25, step=8,
+                                    label="Frames por escena",
+                                )
+                                story_fps = gr.Slider(8, 24, 12, step=1, label="FPS")
+                            with gr.Row():
+                                story_guidance = gr.Slider(
+                                    1.0, 15.0, 6.0, step=0.5, label="Guidance")
+                                story_steps = gr.Slider(
+                                    10, 50, 30, step=5, label="Pasos por escena")
+                            story_seed = gr.Number(
+                                -1, label="Seed (-1 = aleatorio)", precision=0)
+                            story_crossfade = gr.Slider(
+                                0, 12, 4, step=1,
+                                label="🔀 Frames de crossfade entre escenas")
+
+                        story_gen_btn = gr.Button(
+                            "📖 Generar Historia Completa",
+                            variant="primary",
+                            elem_classes="gen-btn",
+                        )
+
+                        gr.Markdown("""
+---
+#### ⏱️ Estimación de tiempo
+| Escenas | Frames/escena | FPS | Duración aprox. | Tiempo GPU (RTX 3090) |
+|---------|--------------|-----|-----------------|----------------------|
+| 3       | 25           | 12  | ~6 seg          | ~3-5 min             |
+| 5       | 25           | 12  | ~10 seg         | ~5-8 min             |
+| 8       | 25           | 12  | ~16 seg         | ~8-13 min            |
+| 5       | 49           | 24  | ~10 seg         | ~10-15 min           |
+| 10      | 25           | 12  | ~20 seg         | ~15-20 min           |
+
+> **Nota:** La primera escena usa CogVideoX-5B T2V (~14 GB). Las siguientes 
+> usan CogVideoX-5B-I2V (~14 GB). El sistema cambiará entre modelos automáticamente.
+                        """)
+
+                    # ── RIGHT: Output ────────────────────────────────────
+                    with gr.Column(scale=1, min_width=400):
+                        story_output_video = gr.Video(label="🎥 Historia Completa")
+                        story_output_info = gr.Markdown()
+
         # ──────────────────────────────────────────────────────────────────
         # Event wiring
         # ──────────────────────────────────────────────────────────────────
@@ -1475,6 +1772,20 @@ correspondientes en cada frame. Soporta esqueletos: `human`, `quadruped`, `bird`
                 crossfade_frames,
             ],
             outputs=[output_video, output_info, val_out_md],
+        )
+
+        # Story Mode
+        story_gen_btn.click(
+            generate_story,
+            inputs=[
+                story_script, story_negative,
+                story_lighting, story_cinematography,
+                story_quality, story_atmosphere, story_genre,
+                story_frames, story_fps, story_guidance,
+                story_steps, story_seed, story_crossfade,
+                story_ref_image,
+            ],
+            outputs=[story_output_video, story_output_info],
         )
 
         # LoRA manager
