@@ -1,0 +1,29 @@
+# ── Core ML ────────────────────────────────────────────
+diffusers>=0.31.0
+transformers>=4.45.0
+accelerate>=0.33.0
+safetensors>=0.4.3
+sentencepiece>=0.1.99
+tokenizers>=0.19.0
+
+# ── Video export ──────────────────────────────────────────
+imageio>=2.34.0
+imageio-ffmpeg>=0.5.1
+av>=12.0.0
+
+# ── Image processing ───────────────────────────────────────
+Pillow>=10.4.0
+opencv-python-headless>=4.10.0
+numpy>=1.26.0
+
+# ── UI ───────────────────────────────────────────────────
+gradio>=4.44.0
+
+# ── Utilities ───────────────────────────────────────────────
+huggingface-hub>=0.24.0   # incluye CLI: huggingface-cli login
+tqdm>=4.66.0
+psutil>=5.9.0
+
+# ── Optional: Flash Attention (mejora velocidad) ──
+# Descomenta si tu GPU lo soporta (Ampere+):
+# flash-attn>=2.6.0

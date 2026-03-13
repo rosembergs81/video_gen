@@ -1,0 +1,49 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Pytest / Coverage
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Environments
+venv/
+env/
+.env/
+.venv/
+env.bak/
+venv.bak/
+
+# Project specific
+outputs/
+*.mp4
+*.gif
+*.webm
+
+# Database
+videogen.db
+videogen.db-wal
+videogen.db-shm
+
+# Models, Weights and LoRAs
+# Only ignore model weight files, not index.json
+loras/*.safetensors
+loras/*.pt
+loras/*.ckpt
+loras/*.bin
+
+# VS Code / IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS specific
+.DS_Store
+Thumbs.db
+
+# Secrets / Configs
+.env
+
