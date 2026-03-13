@@ -82,7 +82,7 @@ cd /workspace/video_gen
 # HF_TOKEN ya está en el entorno virtual si se configuró durante el setup.
 # Si quieres sobreescribirlo en tiempo de ejecución:
 #   export HF_TOKEN=hf_nueva_clave && bash /workspace/start.sh
-python app.py --host 0.0.0.0 --port 7860
+python app.py --share
 EOF
 chmod +x /workspace/start.sh
 echo "  ✅ Script de inicio creado en /workspace/start.sh"

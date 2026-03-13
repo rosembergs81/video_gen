@@ -98,6 +98,8 @@ python app.py --host 0.0.0.0 --port 7860
 # Tunnel Share (Link https:// temporal gratuito via Gradio)
 python app.py --share
 
+source /workspace/venv/bin/activate && python /workspace/video_gen/app.py --share
+
 # Acceso Seguro:
 python app.py --auth user123 claveSegura
 ```
