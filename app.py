@@ -224,6 +224,10 @@ def _crossfade_segments(segments: list[list], overlap_frames: int = 4) -> list:
     blend the overlapping region between consecutive segments using alpha
     crossfade for smooth transitions.
     """
+    # Filter out empty segments to prevent IndexError
+    segments = [s for s in segments if s]
+    if not segments:
+        return []
     if len(segments) <= 1:
         return segments[0] if segments else []
 
@@ -658,14 +662,6 @@ def generate_video(
 # STORY MODE — Multi-scene chained generation with visual continuity
 # ─────────────────────────────────────────────────────────────────────────────
 
-# I2V models available for continuity chaining
-_I2V_CONTINUITY_MODELS = {
-    "CogVideoX-5B-I2V (Img→Vid)": {
-        "repo": "THUDM/CogVideoX-5b-I2V",
-        "pipeline": "CogVideoXImageToVideoPipeline",
-    },
-}
-
 def _get_i2v_pipe(progress=None):
     """Load the I2V pipeline for story continuity chaining."""
     return _load_pipeline("CogVideoX-5B-I2V (Img→Vid)", progress=progress)
@@ -694,14 +690,14 @@ def generate_story(
         raise gr.Error("⚠️ El guión no puede estar vacío.")
 
     # Parse scenes — one per line, skip empty lines and comments
+    import re as _re_story
     scenes = []
     for line in story_script.strip().split("\n"):
         line = line.strip()
         if not line or line.startswith("#"):
             continue
         # Remove leading scene number if present (e.g., "1. " or "1: ")
-        import re
-        line = re.sub(r"^\d+[\.\:\)\-]\s*", "", line)
+        line = _re_story.sub(r"^\d+[\.\:\)\-]\s*", "", line)
         if line:
             scenes.append(line)
 
@@ -747,43 +743,48 @@ def generate_story(
 
         scene_log.append(f"`{i+1}.` {enhanced[:100]}{'…' if len(enhanced) > 100 else ''}")
 
-        if i == 0 and last_frame_pil is None:
-            # ── SCENE 1 (Text-to-Video) ──────────────────────────────────
-            progress(prog_base + 0.02, desc=f"🎬 Escena 1/{len(scenes)}: Generando con T2V...")
-            pipe_t2v = _load_pipeline("CogVideoX-5B (T2V)", progress=progress)
-
-            def step_cb_t2v(pipe_cls, step, timestep, cb_kwargs):
-                progress(prog_base, desc=f"⏳ Escena {i+1}: Paso {step+1}/{steps}...")
+        # Callback factory — captures scene_idx and pb by value (avoids closure bug)
+        def _make_step_cb(scene_idx, pb):
+            def step_cb(pipe_cls, step, timestep, cb_kwargs):
+                progress(pb, desc=f"⏳ Escena {scene_idx+1}: Paso {step+1}/{steps}...")
                 return cb_kwargs
+            return step_cb
 
-            frames = pipe_t2v(
-                prompt=enhanced, negative_prompt=negative or None,
-                num_frames=seg_frames, guidance_scale=guidance,
-                num_inference_steps=steps, generator=gen,
-                callback_on_step_end=step_cb_t2v,
-            ).frames[0]
+        try:
+            if i == 0 and last_frame_pil is None:
+                # ── SCENE 1 (Text-to-Video) ──────────────────────────────────
+                progress(prog_base + 0.02, desc=f"🎬 Escena 1/{len(scenes)}: Generando con T2V...")
+                pipe_t2v = _load_pipeline("CogVideoX-5B (T2V)", progress=progress)
 
-        else:
-            # ── SCENE 2+ (Image-to-Video for continuity) ─────────────────
-            progress(prog_base + 0.02,
-                     desc=f"🎬 Escena {i+1}/{len(scenes)}: Generando con I2V (continuidad)...")
+                frames = pipe_t2v(
+                    prompt=enhanced, negative_prompt=negative or None,
+                    num_frames=seg_frames, guidance_scale=guidance,
+                    num_inference_steps=steps, generator=gen,
+                    callback_on_step_end=_make_step_cb(i, prog_base),
+                ).frames[0]
 
-            pipe_i2v = _get_i2v_pipe(progress=progress)
+            else:
+                # ── SCENE 2+ (Image-to-Video for continuity) ─────────────────
+                progress(prog_base + 0.02,
+                         desc=f"🎬 Escena {i+1}/{len(scenes)}: Generando con I2V (continuidad)...")
 
-            # Use last frame from previous scene as seed image
-            seed_img = last_frame_pil.resize((720, 480), Image.LANCZOS)
+                pipe_i2v = _get_i2v_pipe(progress=progress)
+                seed_img = last_frame_pil.resize((720, 480), Image.LANCZOS)
 
-            def step_cb_i2v(pipe_cls, step, timestep, cb_kwargs):
-                progress(prog_base, desc=f"⏳ Escena {i+1}: Paso {step+1}/{steps}...")
-                return cb_kwargs
+                frames = pipe_i2v(
+                    image=seed_img,
+                    prompt=enhanced, negative_prompt=negative or None,
+                    num_frames=seg_frames, guidance_scale=guidance,
+                    num_inference_steps=steps, generator=gen,
+                    callback_on_step_end=_make_step_cb(i, prog_base),
+                ).frames[0]
 
-            frames = pipe_i2v(
-                image=seed_img,
-                prompt=enhanced, negative_prompt=negative or None,
-                num_frames=seg_frames, guidance_scale=guidance,
-                num_inference_steps=steps, generator=gen,
-                callback_on_step_end=step_cb_i2v,
-            ).frames[0]
+        except torch.cuda.OutOfMemoryError:
+            torch.cuda.empty_cache()
+            raise gr.Error(
+                f"❌ GPU sin memoria en escena {i+1}/{len(scenes)}. "
+                f"Reduce frames por escena o el número de escenas."
+            )
 
         # Convert frames to list and save last frame for next scene
         frame_list = list(frames)

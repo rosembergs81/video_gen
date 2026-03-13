@@ -50,6 +50,11 @@ MODELS_CLI = {
         "pipeline": "CogVideoXImageToVideoPipeline",
         "type":     "i2v",
     },
+    "cogvideox-v2v": {
+        "repo":     "THUDM/CogVideoX-5b",
+        "pipeline": "CogVideoXVideoToVideoPipeline",
+        "type":     "v2v",
+    },
     "ltx": {
         "repo":     "Lightricks/LTX-Video",
         "pipeline": "LTXPipeline",
@@ -77,6 +82,9 @@ def parse_args():
     p.add_argument("--model",           default="cogvideox",
                    choices=list(MODELS_CLI.keys()),     help="Modelo a usar")
     p.add_argument("--image",           default=None,   help="Imagen de entrada (I2V)")
+    p.add_argument("--video",           default=None,   help="Video de entrada (V2V)")
+    p.add_argument("--v2v-strength",    type=float, default=0.5,
+                   help="Fuerza de transformación V2V (0.1-1.0)")
     p.add_argument("--output",          default="output.mp4")
 
     # Motion tags (strings que se añaden al prompt)
@@ -120,14 +128,16 @@ def parse_args():
 def load_pipe(model_key, dtype, token: str | None = None):
     from diffusers import (
         CogVideoXPipeline, CogVideoXImageToVideoPipeline,
+        CogVideoXVideoToVideoPipeline,
         LTXPipeline, LTXImageToVideoPipeline,
     )
     cfg = MODELS_CLI[model_key]
     cls_map = {
-        "CogVideoXPipeline":             CogVideoXPipeline,
-        "CogVideoXImageToVideoPipeline": CogVideoXImageToVideoPipeline,
-        "LTXPipeline":                   LTXPipeline,
-        "LTXImageToVideoPipeline":       LTXImageToVideoPipeline,
+        "CogVideoXPipeline":              CogVideoXPipeline,
+        "CogVideoXImageToVideoPipeline":  CogVideoXImageToVideoPipeline,
+        "CogVideoXVideoToVideoPipeline":  CogVideoXVideoToVideoPipeline,
+        "LTXPipeline":                    LTXPipeline,
+        "LTXImageToVideoPipeline":        LTXImageToVideoPipeline,
     }
     print(f"[INFO] Cargando {cfg['pipeline']} …")
     hf_token = token or os.environ.get("HF_TOKEN") or os.environ.get("HUGGINGFACE_TOKEN")
@@ -136,6 +146,9 @@ def load_pipe(model_key, dtype, token: str | None = None):
         load_kwargs["token"] = hf_token
     pipe = cls_map[cfg["pipeline"]].from_pretrained(cfg["repo"], **load_kwargs)
     pipe.enable_model_cpu_offload()
+    # Disable internal progress bar to avoid flooding terminal
+    if hasattr(pipe, 'progress_bar_config'):
+        pipe.set_progress_bar_config(disable=True)
     if hasattr(pipe, "vae"):
         pipe.vae.enable_slicing()
         pipe.vae.enable_tiling()
@@ -247,14 +260,31 @@ def main():
             height=args.height,
             generator=gen,
         )
+    elif mode == "v2v":
+        if not args.video:
+            sys.exit("❌ --video es requerido para modelos V2V")
+        import imageio
+        reader = imageio.get_reader(args.video)
+        video_frames = [Image.fromarray(f) for f in reader]
+        reader.close()
+        # Resize frames to 720x480 (CogVideoX requirement)
+        video_frames = [f.resize((720, 480), Image.LANCZOS) for f in video_frames]
+        result = pipe(
+            video=video_frames,
+            prompt=final_prompt,
+            negative_prompt=args.negative_prompt or None,
+            num_frames=args.frames,
+            guidance_scale=args.guidance,
+            num_inference_steps=args.steps,
+            strength=args.v2v_strength,
+            generator=gen,
+        )
     else:
         if not args.image:
             sys.exit("❌ --image es requerido para modelos I2V")
         img  = Image.open(args.image).convert("RGB")
-        w, h = img.size
-        sc   = 720 / max(w, h)
-        nw, nh = int(w * sc) // 8 * 8, int(h * sc) // 8 * 8
-        img  = img.resize((nw, nh), Image.LANCZOS)
+        # Resize to 720x480 (CogVideoX I2V requirement)
+        img  = img.resize((720, 480), Image.LANCZOS)
         result = pipe(
             image=img,
             prompt=final_prompt,
