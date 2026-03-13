@@ -167,6 +167,9 @@ def _load_pipeline(model_key: str, progress=None):
     if hasattr(pipe, "vae"):
         pipe.vae.enable_slicing()
         pipe.vae.enable_tiling()
+        
+    if hasattr(pipe, "set_progress_bar_config"):
+        pipe.set_progress_bar_config(disable=True)
 
     _pipeline_cache[model_key] = pipe
     _current_model_key = model_key
@@ -342,7 +345,7 @@ def generate_video(
     num_frames, fps, guidance, steps, width, height, seed,
     # Input image
     input_image,
-    progress=gr.Progress(track_tqdm=True),
+    progress=gr.Progress(track_tqdm=False),
 ):
     if not raw_prompt.strip():
         raise gr.Error("⚠️ El prompt no puede estar vacío.")
