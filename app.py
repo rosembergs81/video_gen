@@ -750,7 +750,10 @@ def build_ui():
                 "Gestures · Prompt Enhancer · DB History**"
             )
             gpu_status_md = gr.Markdown(value="**GPU:** Inicializando...", elem_classes="gpu-monitor")
-            demo.load(gpu_monitor, every=2, outputs=gpu_status_md)
+            
+            # Compatible with Gradio 5+
+            timer = gr.Timer(2)
+            timer.tick(gpu_monitor, outputs=gpu_status_md)
 
         with gr.Tabs():
 

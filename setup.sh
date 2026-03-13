@@ -40,7 +40,8 @@ echo "  ✅ Sistema actualizado"
 
 # ── 2. Entorno virtual ────────────────────────
 echo "[2/6] Creando entorno virtual Python…"
-python3 -m venv /workspace/venv
+# Agregamos --system-site-packages para heredar el PyTorch global de la imagen Docker de Vast.ai
+python3 -m venv --system-site-packages /workspace/venv
 source /workspace/venv/bin/activate
 pip install --upgrade pip -q
 
