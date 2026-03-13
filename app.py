@@ -216,25 +216,36 @@ def _run_pipe(pipe, mode, prompt, negative, input_image,
         ).frames[0]
     else:
         img = Image.fromarray(input_image).convert("RGB")
-        w, h = img.size
-        # For LTX, ensure the scaled dimensions are strictly divisible by 32, not 8.
-        # Original: int(w*sc)//8*8, we change it to 32.
-        sc = 720 / max(w, h)
-        w_scaled = (int(w * sc) // 32) * 32
-        h_scaled = (int(h * sc) // 32) * 32
+        is_cogvideox_i2v = pipe.__class__.__name__ == "CogVideoXImageToVideoPipeline"
         
-        # Prevent 0 dimension error if image aspect ratio is extreme
-        w_scaled = max(32, w_scaled)
-        h_scaled = max(32, h_scaled)
-        
-        img = img.resize((w_scaled, h_scaled), Image.LANCZOS)
-        return pipe(
-            image=img, prompt=prompt, negative_prompt=negative or None,
-            num_frames=num_frames, guidance_scale=guidance,
-            num_inference_steps=steps, generator=gen,
-            height=h_scaled, width=w_scaled,
-            callback_on_step_end=step_callback,
-        ).frames[0]
+        if is_cogvideox_i2v:
+            # CogVideoX-5B-I2V strictly requires exactly 720x480 image and fails if width/height args are explicitly passed.
+            img = img.resize((720, 480), Image.LANCZOS)
+            return pipe(
+                image=img, prompt=prompt, negative_prompt=negative or None,
+                num_frames=num_frames, guidance_scale=guidance,
+                num_inference_steps=steps, generator=gen,
+                callback_on_step_end=step_callback,
+            ).frames[0]
+        else:
+            w, h = img.size
+            # For LTX, ensure the scaled dimensions are strictly divisible by 32.
+            sc = 720 / max(w, h)
+            w_scaled = (int(w * sc) // 32) * 32
+            h_scaled = (int(h * sc) // 32) * 32
+            
+            # Prevent 0 dimension error if image aspect ratio is extreme
+            w_scaled = max(32, w_scaled)
+            h_scaled = max(32, h_scaled)
+            
+            img = img.resize((w_scaled, h_scaled), Image.LANCZOS)
+            return pipe(
+                image=img, prompt=prompt, negative_prompt=negative or None,
+                num_frames=num_frames, guidance_scale=guidance,
+                num_inference_steps=steps, generator=gen,
+                height=h_scaled, width=w_scaled,
+                callback_on_step_end=step_callback,
+            ).frames[0]
 
 # ─────────────────────────────────────────────────────────────────────────────
 # SceneGraph helpers
