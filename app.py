@@ -438,7 +438,7 @@ def generate_video(
                 label=entry.get("name", disp),
             )
     # Advanced schedule from JSON textarea
-    if lora_schedule_json.strip():
+    if lora_schedule_json and lora_schedule_json.strip():
         try:
             custom = json.loads(lora_schedule_json)
             sched.add_from_dict(custom)
