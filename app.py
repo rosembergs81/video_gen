@@ -80,6 +80,11 @@ MODELS = {
         "type":     "i2v",
         "pipeline": "CogVideoXImageToVideoPipeline",
     },
+    "CogVideoX-5B-V2V (Vid→Vid)": {
+        "repo":     "THUDM/CogVideoX-5b",
+        "type":     "v2v",
+        "pipeline": "CogVideoXVideoToVideoPipeline",
+    },
     "LTX-Video (T2V rápido)": {
         "repo":     "Lightricks/LTX-Video",
         "type":     "t2v",
@@ -145,13 +150,15 @@ def _load_pipeline(model_key: str, progress=None):
 
     from diffusers import (
         CogVideoXPipeline, CogVideoXImageToVideoPipeline,
+        CogVideoXVideoToVideoPipeline,
         LTXPipeline, LTXImageToVideoPipeline,
     )
     cls_map = {
-        "CogVideoXPipeline":             CogVideoXPipeline,
-        "CogVideoXImageToVideoPipeline": CogVideoXImageToVideoPipeline,
-        "LTXPipeline":                   LTXPipeline,
-        "LTXImageToVideoPipeline":       LTXImageToVideoPipeline,
+        "CogVideoXPipeline":              CogVideoXPipeline,
+        "CogVideoXImageToVideoPipeline":  CogVideoXImageToVideoPipeline,
+        "CogVideoXVideoToVideoPipeline":  CogVideoXVideoToVideoPipeline,
+        "LTXPipeline":                    LTXPipeline,
+        "LTXImageToVideoPipeline":        LTXImageToVideoPipeline,
     }
     
     msg_desc = f"Descargando / Cargando {cfg['pipeline']} (~14GB - Tomará un momento)..."
@@ -192,18 +199,102 @@ def _frames_to_mp4(frames, fps: int = 24) -> str:
     return out
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Video file → list of PIL frames
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _extract_video_frames(video_path: str, max_frames: int = 49) -> list:
+    """Extract frames from a video file, returning a list of PIL Images."""
+    import imageio
+    reader = imageio.get_reader(video_path)
+    frames = []
+    for i, frame in enumerate(reader):
+        if i >= max_frames:
+            break
+        frames.append(Image.fromarray(frame))
+    reader.close()
+    return frames
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Crossfade interpolation between keyframe segments
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _crossfade_segments(segments: list[list], overlap_frames: int = 4) -> list:
+    """
+    Given a list of segments (each segment is a list of PIL/ndarray frames),
+    blend the overlapping region between consecutive segments using alpha
+    crossfade for smooth transitions.
+    """
+    if len(segments) <= 1:
+        return segments[0] if segments else []
+
+    overlap_frames = max(1, overlap_frames)
+    result = list(segments[0])
+
+    for seg in segments[1:]:
+        # Number of frames we can actually overlap
+        actual_overlap = min(overlap_frames, len(result), len(seg))
+        if actual_overlap <= 0:
+            result.extend(seg)
+            continue
+
+        # Blend the overlapping region
+        blended = []
+        for j in range(actual_overlap):
+            alpha = (j + 1) / (actual_overlap + 1)  # 0→1 smoothly
+            frame_a = result[-(actual_overlap - j)]
+            frame_b = seg[j]
+            # Convert to numpy for blending
+            arr_a = np.array(frame_a) if isinstance(frame_a, Image.Image) else frame_a
+            arr_b = np.array(frame_b) if isinstance(frame_b, Image.Image) else frame_b
+            # Resize frame_b to match frame_a if dimensions differ
+            if arr_a.shape != arr_b.shape:
+                frame_b_pil = Image.fromarray(arr_b).resize(
+                    (arr_a.shape[1], arr_a.shape[0]), Image.LANCZOS
+                )
+                arr_b = np.array(frame_b_pil)
+            mixed = ((1 - alpha) * arr_a.astype(np.float32) +
+                     alpha * arr_b.astype(np.float32))
+            blended.append(mixed.astype(np.uint8))
+
+        # Replace the tail of result with blended frames
+        result = result[:-(actual_overlap)] + blended + list(seg[actual_overlap:])
+
+    return result
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Core generation logic
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _run_pipe(pipe, mode, prompt, negative, input_image,
-              num_frames, guidance, steps, width, height, gen, progress=None, base_prog=0.0):
+              num_frames, guidance, steps, width, height, gen,
+              progress=None, base_prog=0.0, input_video_path=None,
+              v2v_strength=0.7):
     
     def step_callback(pipe_cls, step: int, timestep: int, callback_kwargs: dict):
         if progress is not None:
             progress(base_prog, desc=f"⏳ Inferencia de IA: Procesando Paso {step+1}/{steps}...")
         return callback_kwargs
 
-    if mode == "t2v":
+    if mode == "v2v":
+        # ── Video-to-Video ───────────────────────────────────────────────
+        if not input_video_path:
+            raise ValueError("El modo V2V requiere un video de entrada.")
+        source_frames = _extract_video_frames(input_video_path, max_frames=num_frames)
+        if not source_frames:
+            raise ValueError("No se pudieron extraer frames del video.")
+        # CogVideoX V2V expects frames resized to 720x480
+        source_frames = [f.resize((720, 480), Image.LANCZOS) for f in source_frames]
+        return pipe(
+            video=source_frames,
+            prompt=prompt, negative_prompt=negative or None,
+            num_frames=len(source_frames),
+            guidance_scale=guidance,
+            strength=v2v_strength,
+            num_inference_steps=steps, generator=gen,
+            callback_on_step_end=step_callback,
+        ).frames[0]
+
+    elif mode == "t2v":
         # Force dimensions to be divisible by 32 for LTX
         w_t2v = (width // 32) * 32
         h_t2v = (height // 32) * 32
@@ -215,11 +306,11 @@ def _run_pipe(pipe, mode, prompt, negative, input_image,
             callback_on_step_end=step_callback,
         ).frames[0]
     else:
+        # ── Image-to-Video ───────────────────────────────────────────────
         img = Image.fromarray(input_image).convert("RGB")
         is_cogvideox_i2v = pipe.__class__.__name__ == "CogVideoXImageToVideoPipeline"
         
         if is_cogvideox_i2v:
-            # CogVideoX-5B-I2V strictly requires exactly 720x480 image and fails if width/height args are explicitly passed.
             img = img.resize((720, 480), Image.LANCZOS)
             return pipe(
                 image=img, prompt=prompt, negative_prompt=negative or None,
@@ -229,15 +320,11 @@ def _run_pipe(pipe, mode, prompt, negative, input_image,
             ).frames[0]
         else:
             w, h = img.size
-            # For LTX, ensure the scaled dimensions are strictly divisible by 32.
             sc = 720 / max(w, h)
             w_scaled = (int(w * sc) // 32) * 32
             h_scaled = (int(h * sc) // 32) * 32
-            
-            # Prevent 0 dimension error if image aspect ratio is extreme
             w_scaled = max(32, w_scaled)
             h_scaled = max(32, h_scaled)
-            
             img = img.resize((w_scaled, h_scaled), Image.LANCZOS)
             return pipe(
                 image=img, prompt=prompt, negative_prompt=negative or None,
@@ -354,8 +441,13 @@ def generate_video(
     lora_schedule_json,
     # Generation params
     num_frames, fps, guidance, steps, width, height, seed,
-    # Input image
+    # Inputs
     input_image,
+    input_video,
+    # V2V strength
+    v2v_strength,
+    # Crossfade
+    crossfade_frames,
     progress=gr.Progress(track_tqdm=False),
 ):
     if not raw_prompt.strip():
@@ -365,6 +457,13 @@ def generate_video(
     mode = cfg["type"]
     if mode == "i2v" and input_image is None:
         raise gr.Error("⚠️ Este modelo requiere imagen de entrada.")
+    if mode == "v2v" and input_video is None:
+        raise gr.Error("⚠️ Este modelo requiere un video de entrada.")
+
+    # Resolve video path for V2V
+    input_video_path = None
+    if mode == "v2v" and input_video is not None:
+        input_video_path = input_video if isinstance(input_video, str) else input_video.name
 
     # ── 1. Scene parsing ──────────────────────────────────────────────────────
     progress(0.02, desc="📖 Parseando escenas…")
@@ -476,7 +575,7 @@ def generate_video(
     gen = (torch.Generator("cuda").manual_seed(int(seed))
            if int(seed) != -1 else None)
     t0 = time.time()
-    all_frames = []
+    segments = []  # list of lists of frames, one per keyframe
 
     for i, (kf, enhanced) in enumerate(zip(keyframes, enhanced_prompts)):
         base_progress = 0.15 + 0.75 * (i / len(keyframes))
@@ -499,12 +598,22 @@ def generate_video(
             frames = _run_pipe(
                 pipe, mode, enhanced, negative, input_image,
                 seg_frames, guidance, steps, width, height, gen,
-                progress=progress, base_prog=base_progress
+                progress=progress, base_prog=base_progress,
+                input_video_path=input_video_path,
+                v2v_strength=float(v2v_strength) if v2v_strength else 0.7,
             )
-            all_frames.extend(frames)
+            segments.append(list(frames))
         except torch.cuda.OutOfMemoryError:
             torch.cuda.empty_cache()
             raise gr.Error("❌ GPU sin memoria. Reduce resolución o frames.")
+
+    # ── 7b. Crossfade interpolation between keyframe segments ─────────────────
+    cf = int(crossfade_frames) if crossfade_frames else 0
+    if cf > 0 and len(segments) > 1:
+        progress(0.91, desc="🔀 Aplicando interpolación crossfade entre segmentos…")
+        all_frames = _crossfade_segments(segments, overlap_frames=cf)
+    else:
+        all_frames = [f for seg in segments for f in seg]
 
     # ── 8. Export ─────────────────────────────────────────────────────────────
     progress(0.92, desc="💾 Exportando MP4…")
@@ -816,6 +925,15 @@ def build_ui():
                             label="🖼️ Imagen de entrada (solo modelos I2V)",
                             type="numpy", visible=False,
                         )
+                        input_video = gr.Video(
+                            label="🎞️ Video de entrada (solo modelo V2V)",
+                            visible=False,
+                        )
+                        v2v_strength = gr.Slider(
+                            0.1, 1.0, 0.7, step=0.05,
+                            label="🎚️ Fuerza de transformación V2V (0.1=sutil, 1.0=completa)",
+                            visible=False,
+                        )
 
                         # ── Scene Prompt ───────────────────────────────
                         with gr.Accordion("📖 Prompt / Escenas", open=True):
@@ -906,6 +1024,21 @@ def build_ui():
                                 steps    = gr.Slider(10, 50, 50, step=5,
                                                      label="Pasos")
                             seed = gr.Number(-1, label="Seed (-1 = aleatorio)", precision=0)
+
+                        # ── Crossfade (interpolación entre keyframes) ─────
+                        with gr.Accordion("🔀 Interpolación entre Keyframes", open=False):
+                            crossfade_frames = gr.Slider(
+                                0, 16, 4, step=1,
+                                label="Frames de crossfade (0 = sin transición)",
+                            )
+                            gr.Markdown(
+                                "Cuando tu prompt tiene múltiples escenas (`→` o `then`), la IA genera cada segmento por separado. "
+                                "El **crossfade** mezcla suavemente los últimos N frames de un segmento con los primeros N del siguiente, "
+                                "creando transiciones cinematográficas fluidas en lugar de cortes abruptos.\n\n"
+                                "- **0**: Sin interpolación (corte directo)\n"
+                                "- **2-4**: Transición rápida y sutil\n"
+                                "- **8-16**: Transición larga y suave (estilo fade)"
+                            )
 
                         # ── Presets ───────────────────────────────────
                         with gr.Accordion("💾 Presets", open=False):
@@ -1285,10 +1418,32 @@ correspondientes en cada frame. Soporta esqueletos: `human`, `quadruped`, `bird`
 
         # Model badge
         def _mode_badge(key):
-            is_i2v = MODELS[key]["type"] == "i2v"
-            return (gr.update(visible=is_i2v),
-                    "**Modo:** Imagen → Video" if is_i2v else "**Modo:** Texto → Video")
-        model_key.change(_mode_badge, model_key, [input_image, mode_badge])
+            mtype = MODELS[key]["type"]
+            if mtype == "v2v":
+                return (
+                    gr.update(visible=False),   # input_image
+                    "**Modo:** Video → Video",  # mode_badge
+                    gr.update(visible=True),    # input_video
+                    gr.update(visible=True),    # v2v_strength
+                )
+            elif mtype == "i2v":
+                return (
+                    gr.update(visible=True),
+                    "**Modo:** Imagen → Video",
+                    gr.update(visible=False),
+                    gr.update(visible=False),
+                )
+            else:
+                return (
+                    gr.update(visible=False),
+                    "**Modo:** Texto → Video",
+                    gr.update(visible=False),
+                    gr.update(visible=False),
+                )
+        model_key.change(
+            _mode_badge, model_key,
+            [input_image, mode_badge, input_video, v2v_strength],
+        )
 
         # Gesture preview
         def _gesture_preview(name, t):
@@ -1316,7 +1471,8 @@ correspondientes en cada frame. Soporta esqueletos: `human`, `quadruped`, `bird`
                 gesture_name, gesture_t,
                 active_loras, lora_schedule_json,
                 num_frames, fps, guidance, steps, width, height, seed,
-                input_image,
+                input_image, input_video, v2v_strength,
+                crossfade_frames,
             ],
             outputs=[output_video, output_info, val_out_md],
         )
