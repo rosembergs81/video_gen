@@ -130,7 +130,7 @@ def _lora_choices(idx: list) -> list:
 # Pipeline management
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _load_pipeline(model_key: str):
+def _load_pipeline(model_key: str, progress=None):
     global _pipeline_cache, _current_model_key
     if model_key == _current_model_key and model_key in _pipeline_cache:
         return _pipeline_cache[model_key]
@@ -153,7 +153,12 @@ def _load_pipeline(model_key: str):
         "LTXPipeline":                   LTXPipeline,
         "LTXImageToVideoPipeline":       LTXImageToVideoPipeline,
     }
-    print(f"[INFO] Loading {cfg['pipeline']} …")
+    
+    msg_desc = f"Descargando / Cargando {cfg['pipeline']} (~14GB - Tomará un momento)..."
+    print(f"[INFO] {msg_desc}")
+    if progress:
+        progress(0.10, desc=msg_desc)
+        
     load_kwargs = {"torch_dtype": dtype}
     if HF_TOKEN:
         load_kwargs["token"] = HF_TOKEN
@@ -188,13 +193,20 @@ def _frames_to_mp4(frames, fps: int = 24) -> str:
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _run_pipe(pipe, mode, prompt, negative, input_image,
-              num_frames, guidance, steps, width, height, gen):
+              num_frames, guidance, steps, width, height, gen, progress=None, base_prog=0.0):
+    
+    def step_callback(pipe_cls, step: int, timestep: int, callback_kwargs: dict):
+        if progress is not None:
+            progress(base_prog, desc=f"⏳ Inferencia de IA: Procesando Paso {step+1}/{steps}...")
+        return callback_kwargs
+
     if mode == "t2v":
         return pipe(
             prompt=prompt, negative_prompt=negative or None,
             num_frames=num_frames, guidance_scale=guidance,
             num_inference_steps=steps,
             width=width, height=height, generator=gen,
+            callback_on_step_end=step_callback,
         ).frames[0]
     else:
         img = Image.fromarray(input_image).convert("RGB")
@@ -205,6 +217,7 @@ def _run_pipe(pipe, mode, prompt, negative, input_image,
             image=img, prompt=prompt, negative_prompt=negative or None,
             num_frames=num_frames, guidance_scale=guidance,
             num_inference_steps=steps, generator=gen,
+            callback_on_step_end=step_callback,
         ).frames[0]
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -403,8 +416,8 @@ def generate_video(
     negative = _enhancer.get_negative(negative_preset)
 
     # ── 5. Load model ─────────────────────────────────────────────────────────
-    progress(0.08, desc="🤖 Cargando modelo…")
-    pipe = _load_pipeline(model_key)
+    progress(0.08, desc="🤖 Localizando e Inicializando Motor IA…")
+    pipe = _load_pipeline(model_key, progress=progress)
 
     # ── 6. LoRA schedule ──────────────────────────────────────────────────────
     progress(0.12, desc="🎨 Configurando LoRAs…")
@@ -439,10 +452,9 @@ def generate_video(
     all_frames = []
 
     for i, (kf, enhanced) in enumerate(zip(keyframes, enhanced_prompts)):
-        progress(
-            0.15 + 0.75 * (i / len(keyframes)),
-            desc=f"🎬 Keyframe {i+1}/{len(keyframes)}…",
-        )
+        base_progress = 0.15 + 0.75 * (i / len(keyframes))
+        progress(base_progress, desc=f"🎬 Preparando entorno de generacion {i+1}/{len(keyframes)}…")
+        
         # Apply LoRA weights for this keyframe's midpoint frame
         mid_frame = round((kf.t_start + kf.t_end) / 2 * num_frames)
         sched.apply_for_frame(mid_frame)
@@ -460,6 +472,7 @@ def generate_video(
             frames = _run_pipe(
                 pipe, mode, enhanced, negative, input_image,
                 seg_frames, guidance, steps, width, height, gen,
+                progress=progress, base_prog=base_progress
             )
             all_frames.extend(frames)
         except torch.cuda.OutOfMemoryError:
