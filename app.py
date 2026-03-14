@@ -51,16 +51,11 @@ from modules.skeletal_animator    import (
     SkeletalAnimator, SKELETON_TEMPLATES, POSE_LIBRARY,
 )
 from modules.physics_validator    import PhysicsValidator
-
-# ─────────────────────────────────────────────────────────────────────────────
-# HuggingFace token (set via: export HF_TOKEN=hf_xxxxx  in Linux/Vast.ai)
-# ─────────────────────────────────────────────────────────────────────────────
-HF_TOKEN: str | None = os.environ.get("HF_TOKEN") or os.environ.get("HUGGINGFACE_TOKEN")
-if HF_TOKEN:
-    print(f"[INFO] HF_TOKEN encontrado (longitud={len(HF_TOKEN)}) — se usará para descargar modelos.")
-else:
-    print("[WARN] HF_TOKEN no definido. Los modelos con gating pueden fallar.\n"
-          "  Para activarlo en Vast.ai: export HF_TOKEN=hf_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx")
+from modules.pipeline_utils       import (
+    MODELS, HF_TOKEN, load_pipeline as _load_pipeline,
+    frames_to_mp4 as _frames_to_mp4_raw,
+    extract_video_frames as _extract_video_frames,
+)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Config
@@ -68,34 +63,6 @@ else:
 OUTPUT_DIR  = Path("outputs");  OUTPUT_DIR.mkdir(exist_ok=True)
 LORAS_DIR   = Path("loras");    LORAS_DIR.mkdir(exist_ok=True)
 LORAS_INDEX = LORAS_DIR / "index.json"
-
-MODELS = {
-    "CogVideoX-5B (T2V)": {
-        "repo":     "THUDM/CogVideoX-5b",
-        "type":     "t2v",
-        "pipeline": "CogVideoXPipeline",
-    },
-    "CogVideoX-5B-I2V (Img→Vid)": {
-        "repo":     "THUDM/CogVideoX-5b-I2V",
-        "type":     "i2v",
-        "pipeline": "CogVideoXImageToVideoPipeline",
-    },
-    "CogVideoX-5B-V2V (Vid→Vid)": {
-        "repo":     "THUDM/CogVideoX-5b",
-        "type":     "v2v",
-        "pipeline": "CogVideoXVideoToVideoPipeline",
-    },
-    "LTX-Video (T2V rápido)": {
-        "repo":     "Lightricks/LTX-Video",
-        "type":     "t2v",
-        "pipeline": "LTXPipeline",
-    },
-    "LTX-Video-I2V (Img→Vid rápido)": {
-        "repo":     "Lightricks/LTX-Video",
-        "type":     "i2v",
-        "pipeline": "LTXImageToVideoPipeline",
-    },
-}
 
 CAMERA_PRESETS = [
     "—", "zoom_in", "zoom_out", "pan_left_to_right", "orbit",
@@ -132,87 +99,12 @@ def _lora_choices(idx: list) -> list:
     return [f"{l['name']}  [{l['category']}]" for l in idx]
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Pipeline management
-# ─────────────────────────────────────────────────────────────────────────────
-
-def _load_pipeline(model_key: str, progress=None):
-    global _pipeline_cache, _current_model_key
-    if model_key == _current_model_key and model_key in _pipeline_cache:
-        return _pipeline_cache[model_key]
-
-    for v in list(_pipeline_cache.values()):
-        del v
-    torch.cuda.empty_cache()
-    _pipeline_cache = {}
-
-    cfg   = MODELS[model_key]
-    dtype = torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
-
-    from diffusers import (
-        CogVideoXPipeline, CogVideoXImageToVideoPipeline,
-        CogVideoXVideoToVideoPipeline,
-        LTXPipeline, LTXImageToVideoPipeline,
-    )
-    cls_map = {
-        "CogVideoXPipeline":              CogVideoXPipeline,
-        "CogVideoXImageToVideoPipeline":  CogVideoXImageToVideoPipeline,
-        "CogVideoXVideoToVideoPipeline":  CogVideoXVideoToVideoPipeline,
-        "LTXPipeline":                    LTXPipeline,
-        "LTXImageToVideoPipeline":        LTXImageToVideoPipeline,
-    }
-    
-    msg_desc = f"Descargando / Cargando {cfg['pipeline']} (~14GB - Tomará un momento)..."
-    print(f"[INFO] {msg_desc}")
-    if progress:
-        progress(0.10, desc=msg_desc)
-        
-    load_kwargs = {"torch_dtype": dtype}
-    if HF_TOKEN:
-        load_kwargs["token"] = HF_TOKEN
-    pipe = cls_map[cfg["pipeline"]].from_pretrained(cfg["repo"], **load_kwargs)
-    pipe.enable_model_cpu_offload()
-    if hasattr(pipe, "vae"):
-        pipe.vae.enable_slicing()
-        pipe.vae.enable_tiling()
-        
-    if hasattr(pipe, "set_progress_bar_config"):
-        pipe.set_progress_bar_config(disable=True)
-
-    _pipeline_cache[model_key] = pipe
-    _current_model_key = model_key
-    return pipe
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Frames → MP4
+# Pipeline & video helpers — thin wrappers around pipeline_utils
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _frames_to_mp4(frames, fps: int = 24) -> str:
-    import imageio
-    out = str(OUTPUT_DIR / f"{uuid.uuid4().hex}.mp4")
-    w = imageio.get_writer(out, fps=fps, codec="libx264",
-                            quality=8, pixelformat="yuv420p")
-    for f in frames:
-        if isinstance(f, Image.Image):
-            f = np.array(f)
-        w.append_data(f)
-    w.close()
-    return out
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Video file → list of PIL frames
-# ─────────────────────────────────────────────────────────────────────────────
-
-def _extract_video_frames(video_path: str, max_frames: int = 49) -> list:
-    """Extract frames from a video file, returning a list of PIL Images."""
-    import imageio
-    reader = imageio.get_reader(video_path)
-    frames = []
-    for i, frame in enumerate(reader):
-        if i >= max_frames:
-            break
-        frames.append(Image.fromarray(frame))
-    reader.close()
-    return frames
+    """Write frames to MP4 in the outputs directory."""
+    return _frames_to_mp4_raw(frames, fps=fps, output_dir=OUTPUT_DIR)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Crossfade interpolation between keyframe segments

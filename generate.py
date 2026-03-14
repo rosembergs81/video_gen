@@ -36,36 +36,10 @@ import torch
 import numpy as np
 from PIL import Image
 
-# ─────────────────────────────────────────────
-# Models
-# ─────────────────────────────────────────────
-MODELS_CLI = {
-    "cogvideox": {
-        "repo":     "THUDM/CogVideoX-5b",
-        "pipeline": "CogVideoXPipeline",
-        "type":     "t2v",
-    },
-    "cogvideox-i2v": {
-        "repo":     "THUDM/CogVideoX-5b-I2V",
-        "pipeline": "CogVideoXImageToVideoPipeline",
-        "type":     "i2v",
-    },
-    "cogvideox-v2v": {
-        "repo":     "THUDM/CogVideoX-5b",
-        "pipeline": "CogVideoXVideoToVideoPipeline",
-        "type":     "v2v",
-    },
-    "ltx": {
-        "repo":     "Lightricks/LTX-Video",
-        "pipeline": "LTXPipeline",
-        "type":     "t2v",
-    },
-    "ltx-i2v": {
-        "repo":     "Lightricks/LTX-Video",
-        "pipeline": "LTXImageToVideoPipeline",
-        "type":     "i2v",
-    },
-}
+from modules.pipeline_utils import (
+    MODELS_CLI_ALIASES, load_pipeline, get_model_type,
+    frames_to_mp4, extract_video_frames
+)
 
 # ─────────────────────────────────────────────
 # Arg parsing
@@ -80,7 +54,7 @@ def parse_args():
     p.add_argument("--prompt",          required=True,  help="Descripción base del video")
     p.add_argument("--negative-prompt", default="",     help="Negative prompt")
     p.add_argument("--model",           default="cogvideox",
-                   choices=list(MODELS_CLI.keys()),     help="Modelo a usar")
+                   choices=list(MODELS_CLI_ALIASES.keys()),     help="Modelo a usar")
     p.add_argument("--image",           default=None,   help="Imagen de entrada (I2V)")
     p.add_argument("--video",           default=None,   help="Video de entrada (V2V)")
     p.add_argument("--v2v-strength",    type=float, default=0.5,
@@ -121,38 +95,6 @@ def parse_args():
     p.add_argument("--hf-token", default=None,
                    help="Token de HuggingFace (alternativa a variable de entorno HF_TOKEN)")
     return p.parse_args()
-
-# ─────────────────────────────────────────────
-# Pipeline loader
-# ─────────────────────────────────────────────
-def load_pipe(model_key, dtype, token: str | None = None):
-    from diffusers import (
-        CogVideoXPipeline, CogVideoXImageToVideoPipeline,
-        CogVideoXVideoToVideoPipeline,
-        LTXPipeline, LTXImageToVideoPipeline,
-    )
-    cfg = MODELS_CLI[model_key]
-    cls_map = {
-        "CogVideoXPipeline":              CogVideoXPipeline,
-        "CogVideoXImageToVideoPipeline":  CogVideoXImageToVideoPipeline,
-        "CogVideoXVideoToVideoPipeline":  CogVideoXVideoToVideoPipeline,
-        "LTXPipeline":                    LTXPipeline,
-        "LTXImageToVideoPipeline":        LTXImageToVideoPipeline,
-    }
-    print(f"[INFO] Cargando {cfg['pipeline']} …")
-    hf_token = token or os.environ.get("HF_TOKEN") or os.environ.get("HUGGINGFACE_TOKEN")
-    load_kwargs = {"torch_dtype": dtype}
-    if hf_token:
-        load_kwargs["token"] = hf_token
-    pipe = cls_map[cfg["pipeline"]].from_pretrained(cfg["repo"], **load_kwargs)
-    pipe.enable_model_cpu_offload()
-    # Disable internal progress bar to avoid flooding terminal
-    if hasattr(pipe, 'progress_bar_config'):
-        pipe.set_progress_bar_config(disable=True)
-    if hasattr(pipe, "vae"):
-        pipe.vae.enable_slicing()
-        pipe.vae.enable_tiling()
-    return pipe, cfg["type"]
 
 # ─────────────────────────────────────────────
 # LoRA loader
@@ -199,20 +141,7 @@ def build_prompt(base, camera, subject, speed, style):
         return base
     return base.rstrip(" ,.") + ", " + ", ".join(extras)
 
-# ─────────────────────────────────────────────
-# Save video
-# ─────────────────────────────────────────────
-def save_video(frames, path, fps):
-    import imageio
-    writer = imageio.get_writer(path, fps=fps, codec="libx264",
-                                 quality=8, pixelformat="yuv420p")
-    for f in frames:
-        if isinstance(f, Image.Image):
-            f = np.array(f)
-        writer.append_data(f)
-    writer.close()
 
-# ─────────────────────────────────────────────
 # Main
 # ─────────────────────────────────────────────
 def main():
@@ -237,7 +166,8 @@ def main():
     print(f"\n[Prompt] {final_prompt}\n")
 
     # Load model
-    pipe, mode = load_pipe(args.model, dtype, token=hf_token)
+    pipe = load_pipeline(args.model, token=hf_token, use_cache=False)
+    mode = get_model_type(args.model)
 
     # Load LoRAs
     load_loras(pipe, args.lora, args.lora_weight_name, token=hf_token)
@@ -263,10 +193,7 @@ def main():
     elif mode == "v2v":
         if not args.video:
             sys.exit("❌ --video es requerido para modelos V2V")
-        import imageio
-        reader = imageio.get_reader(args.video)
-        video_frames = [Image.fromarray(f) for f in reader]
-        reader.close()
+        video_frames = extract_video_frames(args.video, max_frames=args.frames)
         # Resize frames to 720x480 (CogVideoX requirement)
         video_frames = [f.resize((720, 480), Image.LANCZOS) for f in video_frames]
         result = pipe(
@@ -295,7 +222,7 @@ def main():
             generator=gen,
         )
 
-    save_video(result.frames[0], args.output, args.fps)
+    frames_to_mp4(result.frames[0], fps=args.fps, output_path=args.output)
     print(f"\n✅ Video guardado en '{args.output}'  ({time.time()-t0:.1f}s)\n")
 
 if __name__ == "__main__":
