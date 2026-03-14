@@ -32,7 +32,7 @@ def get_lora_choices(idx: list = None) -> list:
     return [f"{l['name']}  [{l['category']}]" for l in idx]
 
 
-def add_lora(name, source, category, scale, weight_name, frame_start, frame_end, curve):
+def add_lora(name, source, category, scale, weight_name, frame_start, frame_end, curve, thumbnail_url=None):
     name = name.strip(); source = source.strip()
     if not name or not source:
         return "⚠️ Nombre y fuente son obligatorios.", gr.update(), gr.update()
@@ -48,6 +48,7 @@ def add_lora(name, source, category, scale, weight_name, frame_start, frame_end,
         "frame_start": int(frame_start),
         "frame_end":   int(frame_end),
         "curve":       curve,
+        "thumbnail":   thumbnail_url.strip() if thumbnail_url else None,
     })
     save_lora_index(idx)
     choices = get_lora_choices(idx)

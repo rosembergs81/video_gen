@@ -16,6 +16,7 @@ from modules.lora_scheduler import DynamicLoRASchedule
 from modules.gesture_templates import gesture_to_prompt
 from modules.database import GenerationRecord
 from modules.pipeline_utils import load_pipeline, frames_to_mp4, extract_video_frames
+from modules.cache_manager import segment_cache
 
 _POSITION_MAP = {
     "left":         (0.2, 0.5, 0.0),
@@ -309,13 +310,38 @@ def generate_video(
             seg_frames = (seg_frames // 8) * 8 + 1
 
         try:
-            frames = _run_pipe(
-                pipe, mode, enhanced, negative, input_image,
-                seg_frames, guidance, steps, width, height, gen,
-                progress=progress, base_prog=base_progress,
-                input_video_path=input_video_path,
-                v2v_strength=float(v2v_strength) if v2v_strength else 0.7,
-            )
+            # Check cache first
+            cache_kwargs = {
+                "model_key": model_key,
+                "prompt": enhanced,
+                "negative": negative,
+                "num_frames": seg_frames,
+                "guidance": guidance,
+                "steps": steps,
+                "width": width,
+                "height": height,
+                "seed": int(seed),
+                "loras": active_lora_names or [],
+                "v2v_strength": float(v2v_strength) if v2v_strength else 0.7
+            }
+            cached_frames = segment_cache.get_cached_segment(**cache_kwargs)
+            
+            if cached_frames:
+                print(f"[Cache Hit] Usando segmento cacheado para keyframe {i+1}")
+                progress(base_progress + 0.05, desc=f"⚡ Segmento recuperado del caché ({i+1}/{len(keyframes)})")
+                frames = cached_frames
+            else:
+                frames = _run_pipe(
+                    pipe, mode, enhanced, negative, input_image,
+                    seg_frames, guidance, steps, width, height, gen,
+                    progress=progress, base_prog=base_progress,
+                    input_video_path=input_video_path,
+                    v2v_strength=cache_kwargs["v2v_strength"],
+                )
+                # Save to cache asynchronously or just synchronously
+                print(f"[Cache Miss] Generado y agendado para caché keyframe {i+1}")
+                segment_cache.save_cached_segment(list(frames), **cache_kwargs)
+
             segments.append(list(frames))
         except torch.cuda.OutOfMemoryError:
             torch.cuda.empty_cache()

@@ -55,6 +55,7 @@ from modules.lora_manager     import add_lora, remove_loras, refresh_loras, load
 from modules.generation       import generate_video as _generate_video_core
 from modules.story_mode       import generate_story as _generate_story_core
 from modules.pipeline_utils       import MODELS, HF_TOKEN
+from modules.spatial_control      import render_spatial_control_image, render_depth_map, render_pose_overlay
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Config
@@ -130,6 +131,21 @@ def load_preset_fn(preset_name: str):
 
 def preset_choices():
     return [p.name for p in _db.list_presets()]
+
+# ─────────────────────────────────────────────────────────────────────────────
+# LoRA Gallery UI helper
+# ─────────────────────────────────────────────────────────────────────────────
+def get_lora_gallery_items():
+    idx = load_lora_index()
+    items = []
+    # Usar una imagen dummy si no hay thumbnail
+    dummy = "https://placehold.co/400x300/18181b/a78bfa?text=Módulo+LoRA"
+    for l in idx:
+        thumb = l.get("thumbnail")
+        if not thumb or not thumb.strip():
+            thumb = dummy
+        items.append((thumb, f"{l['name']} [{l['category']}]"))
+    return items
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Temporal validator UI
@@ -503,6 +519,8 @@ Esto permite, por ejemplo, que una LoRA de zoom-in solo afecte los primeros 20 f
                         l_scale  = gr.Slider(0.1, 1.5, 0.8, step=0.05,
                                               label="Escala base")
                         l_wname  = gr.Textbox(label="weight_name (opcional)")
+                        l_thumb  = gr.Textbox(label="🖼️ URL miniatura (opcional)",
+                                               placeholder="https://example.com/preview.jpg")
 
                         gr.Markdown("**🕐 Rango de frames activos (scheduling dinámico)**")
                         with gr.Row():
@@ -548,6 +566,15 @@ Esto permite, por ejemplo, que una LoRA de zoom-in solo afecte los primeros 20 f
                             ),
                             lines=10,
                         )
+
+                gr.Markdown("---")
+                gr.Markdown("### 🖼️ Galería Visual de LoRAs")
+                lora_gallery = gr.Gallery(
+                    label="LoRAs registradas (miniaturas)",
+                    value=get_lora_gallery_items(),
+                    columns=4, height=280, object_fit="cover",
+                )
+                refresh_lora_gallery_btn = gr.Button("🔄 Refrescar galería", size="sm")
 
                 gr.Markdown("""
 ---
@@ -926,6 +953,67 @@ Escribe un **guión** con una escena por línea. El sistema generará automátic
                         story_output_video = gr.Video(label="🎥 Historia Completa")
                         story_output_info = gr.Markdown()
 
+            # ══════════════════════════════════════════════════════════════
+            # TAB 10 — SPATIAL CONTROL (ControlNet-style)
+            # ══════════════════════════════════════════════════════════════
+            with gr.Tab("🎯 Control Espacial (BETA)"):
+                gr.Markdown("""
+### 🎯 Control Espacial — Pose & Depth Map (BETA)
+
+Genera **mapas de profundidad** y **overlays de esqueleto (OpenPose)** a partir de los datos
+del **SceneGraph** y el **SkeletalAnimator**. Estos mapas se pueden inyectar como primer
+frame del pipeline **I2V** para anclar el layout espacial del video.
+
+> ⚠️ **BETA:** Esto no es un ControlNet real (que inyecta en el espacio latente), sino un
+> método que fuerza la composición del primer frame con información de profundidad y pose.
+> Es efectivo para garantizar coherencia de posiciones y poses iniciales.
+                """)
+
+                with gr.Row():
+                    with gr.Column(scale=1):
+                        gr.Markdown("#### Configuración de la escena")
+                        sc_skel_type = gr.Dropdown(
+                            choices=list(SKELETON_TEMPLATES.keys()),
+                            value="human", label="Tipo de esqueleto",
+                        )
+                        with gr.Row():
+                            sc_pose_a = gr.Dropdown(
+                                choices=list(POSE_LIBRARY.get("human", {}).keys()),
+                                value="idle", label="Pose"
+                            )
+
+                        gr.Markdown("#### Posiciones de objetos")
+                        with gr.Row():
+                            sc_obj1_label = gr.Textbox("Personaje", label="Objeto 1 label")
+                            sc_obj1_x = gr.Slider(0, 1, 0.3, step=0.05, label="X")
+                            sc_obj1_y = gr.Slider(0, 1, 0.5, step=0.05, label="Y")
+                            sc_obj1_z = gr.Slider(-0.5, 0.5, 0.0, step=0.05, label="Z (profundidad)")
+                        with gr.Row():
+                            sc_obj2_label = gr.Textbox("Objeto", label="Objeto 2 label")
+                            sc_obj2_x = gr.Slider(0, 1, 0.7, step=0.05, label="X")
+                            sc_obj2_y = gr.Slider(0, 1, 0.5, step=0.05, label="Y")
+                            sc_obj2_z = gr.Slider(-0.5, 0.5, 0.2, step=0.05, label="Z (profundidad)")
+
+                        sc_blend = gr.Slider(0, 1, 0.6, step=0.05,
+                                             label="Blend Pose/Depth (0=solo depth, 1=solo pose)")
+
+                        sc_render_btn = gr.Button("🎨 Renderizar mapa de control", variant="primary")
+
+                    with gr.Column(scale=1):
+                        gr.Markdown("#### Preview")
+                        sc_depth_preview = gr.Image(label="Depth Map")
+                        sc_pose_preview = gr.Image(label="Pose Overlay")
+                        sc_combined_preview = gr.Image(label="Combinado (Depth + Pose)")
+
+                        gr.Markdown("""
+**Cómo usarlo:**
+1. Configura las posiciones de los objetos y la pose del esqueleto.
+2. Haz clic en **Renderizar mapa de control**.
+3. Descarga la imagen combinada y úsala como **imagen de entrada** en la pestaña **🎬 Generar** con un modelo **I2V**.
+4. El video generado respetará la composición espacial de la imagen.
+                        """)
+
+
         # ──────────────────────────────────────────────────────────────────
         # Event wiring
         # ──────────────────────────────────────────────────────────────────
@@ -1009,7 +1097,7 @@ Escribe un **guión** con una escena por línea. El sistema generará automátic
         add_lora_btn.click(
             add_lora,
             inputs=[l_name, l_source, l_cat, l_scale, l_wname,
-                    l_fstart, l_fend, l_curve],
+                    l_fstart, l_fend, l_curve, l_thumb],
             outputs=[lora_add_status, lora_list, active_loras],
         )
         remove_lora_btn.click(
@@ -1018,6 +1106,7 @@ Escribe un **guión** con una escena por línea. El sistema generará automátic
             outputs=[lora_rm_status, lora_list, active_loras],
         )
         refresh_lora_btn.click(refresh_loras, outputs=[lora_list, active_loras])
+        refresh_lora_gallery_btn.click(get_lora_gallery_items, outputs=[lora_gallery])
 
         # Presets
         save_preset_btn.click(
@@ -1113,6 +1202,54 @@ Escribe un **guión** con una escena por línea. El sistema generará automátic
             lambda st, poses, t: skeleton_to_prompt_fn(st, poses, 0.5),
             inputs=[skel_type, skel_seq_input, skel_t],
             outputs=skel_prompt_out,
+        )
+
+        # ── TAB 10: Spatial Control ───────────────────────────────────────
+        def _spatial_render(skel_type, pose_name, 
+                           obj1_label, obj1_x, obj1_y, obj1_z,
+                           obj2_label, obj2_x, obj2_y, obj2_z,
+                           blend):
+            # Build a temporary SceneGraph
+            graph = SceneGraph()
+            graph.add_object("OBJ1", obj1_label, "personaje",
+                             position=(obj1_x, obj1_y, obj1_z))
+            graph.add_object("OBJ2", obj2_label, "objeto",
+                             position=(obj2_x, obj2_y, obj2_z))
+
+            # Get pose data from SkeletalAnimator
+            pose_dict = None
+            try:
+                anim = SkeletalAnimator(skel_type)
+                if pose_name in anim.list_poses():
+                    skel = anim.get_pose(pose_name)
+                    pose_dict = skel.flat_dict()
+            except Exception as e:
+                print(f"[SpatialControl] Cannot render pose: {e}")
+
+            # Render three previews
+            depth_img = render_depth_map(graph, 720, 480)
+            pose_img = render_pose_overlay(
+                pose_dict or {}, skel_type, 720, 480
+            ) if pose_dict else Image.new("RGB", (720, 480), (0, 0, 0))
+            combined_img = render_spatial_control_image(
+                graph, skel_type, pose_dict, 720, 480,
+                blend_alpha=float(blend)
+            )
+            return depth_img, pose_img, combined_img
+
+        def _update_sc_poses(skel_type):
+            poses = list(POSE_LIBRARY.get(skel_type, {}).keys())
+            return gr.update(choices=poses, value=poses[0] if poses else "")
+
+        sc_skel_type.change(_update_sc_poses, inputs=sc_skel_type, outputs=sc_pose_a)
+
+        sc_render_btn.click(
+            _spatial_render,
+            inputs=[sc_skel_type, sc_pose_a,
+                    sc_obj1_label, sc_obj1_x, sc_obj1_y, sc_obj1_z,
+                    sc_obj2_label, sc_obj2_x, sc_obj2_y, sc_obj2_z,
+                    sc_blend],
+            outputs=[sc_depth_preview, sc_pose_preview, sc_combined_preview],
         )
 
     return demo
