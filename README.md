@@ -4,14 +4,13 @@ Generador avanzado de videos de alta calidad a partir de texto o imágenes emple
 
 ---
 
-## ✨ Novedades Recientes (Audit Fixes & Upgrades)
+## ✨ Novedades Recientes (Audit v2)
+- **Story Mode (Continuidad Visual)**: Capacidad de generar historias multi-escena encadenando modelos T2V y I2V de forma secuencial. ¡Únete escenas automáticamente mediante *crossfade*!
+- **Soporte Video-to-Video (V2V)**: Integrado `CogVideoX-5B-V2V` permitiendo transformación de videos con base en un prompt y control de fuerza (`strength`).
+- **Arquitectura Modular Limpia**: Refactor masivo reduciendo `app.py` a la mitad. Lógica extraída a `pipeline_utils.py`, `lora_manager.py`, `generation.py` y `story_mode.py` para facilitar mantenimiento.
+- **Robustez y Anti-Crashes**: Implementados protectores de memoria VRAM (OOM Guards) durante generación en lote, corrección de cierres en *callbacks* de progreso y estabilización en transiciones con segmentos vacíos.
 - **Generación en Cola (Queue)**: Procesamiento asíncrono robusto para soportar entornos remotos (ej: Vast.ai) y varios comandos concurrentes.
-- **Monitor en Tiempo Real (GPU)**: Lectura activa de memoria VRAM (Localizada y Reservada) directo en la inferfaz web.
-- **Galería Integrada**: Módulo de historia visual que carga los últimos renders disponibles.
-- **Comparación A/B (Video)**: Utilidad para cargar 2 ID de generación histórica y compararlos lado-a-lado guardándolos en la base de datos local SQLite.
-- **SceneGraph Activo**: Seguimiento robusto de oclusiones y posiciones espaciales durante el _prompt engineering_.
 - **Performance de Base de Datos Mejorda**: Conexiones a la DB (`videogen.db`) vía Sistema Completo de Connection Pooling seguro sobre multi-hilos para la persistencia del sistema.
-- **Correcciones Estructurales**: Renombrado correcto a `loras/` estándar para entornos Linux, sub-módulo centralizado `__init__.py`.
 
 ---
 
@@ -21,6 +20,7 @@ Generador avanzado de videos de alta calidad a partir de texto o imágenes emple
 |--------|------|------|---------|
 | **CogVideoX-5B** | Texto → Video | ~18 GB | ⭐⭐⭐⭐⭐ |
 | **CogVideoX-5B-I2V** | Imagen → Video | ~18 GB | ⭐⭐⭐⭐⭐ |
+| **CogVideoX-5B-V2V** | Video → Video | ~18 GB | ⭐⭐⭐⭐⭐ |
 | **LTX-Video** | Texto → Video | ~10 GB | ⭐⭐⭐⭐ |
 | **LTX-Video-I2V** | Imagen → Video | ~10 GB | ⭐⭐⭐⭐ |
 
@@ -41,6 +41,10 @@ video_gen/
 ├── outputs/                   # Videos MP4 finalizados
 └── modules/                   # Módulos CORE Internos:
     ├── __init__.py            # Exportaciones globales y APIs
+    ├── generation.py          # Lógica central para render de video standard
+    ├── story_mode.py          # Generador de escenarios multi-secuencia (encadenado I2V)
+    ├── pipeline_utils.py      # Utils comunes, caché de memoria VRAM y catálogo MODELS
+    ├── lora_manager.py        # Controlador UI para bases de datos JSON de LoRAs
     ├── action_extractor.py    # NLP Regex: Verbos y detectores de acciones textuales
     ├── database.py            # SQLite3 Thread-Pooleado Manager
     ├── gesture_templates.py   # Librería y mapping de gestos y templates cinemáticos
