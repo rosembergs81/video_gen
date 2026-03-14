@@ -290,6 +290,10 @@ def generate_video(
             gr.Warning(f"⚠️ JSON de LoRA schedule inválido (se ignoró): {e}")
 
     gen = (torch.Generator("cuda").manual_seed(int(seed)) if int(seed) != -1 else None)
+    
+    progress(0.14, desc="📦 Precargando adaptadores LoRA en memoria…")
+    sched.preload_all()
+    
     t0 = time.time()
     segments = []
 

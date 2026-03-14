@@ -200,7 +200,7 @@ def main():
             video=video_frames,
             prompt=final_prompt,
             negative_prompt=args.negative_prompt or None,
-            num_frames=args.frames,
+            num_frames=len(video_frames),
             guidance_scale=args.guidance,
             num_inference_steps=args.steps,
             strength=args.v2v_strength,

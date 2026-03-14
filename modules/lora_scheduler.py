@@ -160,17 +160,14 @@ class DynamicLoRASchedule:
                 weights.append(round(scale, 3))
         return adapters, weights
 
-    def apply_for_frame(self, frame: int):
+    def preload_all(self):
         """
-        Load & set LoRA weights for the given frame on the attached pipeline.
-        Should be called before generating each keyframe batch.
+        Load all LoRAs upfront into VRAM/GPU via the pipeline to avoid pauses 
+        and memory fragmentation during the segmented generation loop.
         """
         if self.pipeline is None:
             return
-
-        adapters, weights = self.get_active(frame)
-
-        # Load any not yet loaded
+            
         for lora in self.loras:
             if lora.lora_id not in self._loaded:
                 try:
@@ -179,9 +176,33 @@ class DynamicLoRASchedule:
                         kwargs["weight_name"] = lora.weight_name
                     self.pipeline.load_lora_weights(lora.source, **kwargs)
                     self._loaded.add(lora.lora_id)
-                    print(f"[LoRAScheduler] Loaded '{lora.lora_id}'")
+                    print(f"[LoRAScheduler] Pre-loaded '{lora.lora_id}'")
                 except Exception as e:
-                    print(f"[LoRAScheduler] ⚠️ Failed to load '{lora.lora_id}': {e}")
+                    print(f"[LoRAScheduler] ⚠️ Failed to pre-load '{lora.lora_id}': {e}")
+
+    def apply_for_frame(self, frame: int):
+        """
+        Set LoRA weights for the given frame on the attached pipeline.
+        Should be called before generating each keyframe batch.
+        """
+        if self.pipeline is None:
+            return
+
+        adapters, weights = self.get_active(frame)
+
+        # Fallback to load if not preloaded (should be rare)
+        for adapter in adapters:
+            if adapter not in self._loaded:
+                lora = next(l for l in self.loras if l.lora_id == adapter)
+                try:
+                    kwargs = {"adapter_name": lora.lora_id}
+                    if lora.weight_name:
+                        kwargs["weight_name"] = lora.weight_name
+                    self.pipeline.load_lora_weights(lora.source, **kwargs)
+                    self._loaded.add(lora.lora_id)
+                    print(f"[LoRAScheduler] Lazy-loaded '{lora.lora_id}'")
+                except Exception as e:
+                    print(f"[LoRAScheduler] ⚠️ Failed to lazy-load '{lora.lora_id}': {e}")
 
         if adapters:
             self.pipeline.set_adapters(adapters, adapter_weights=weights)
@@ -190,6 +211,8 @@ class DynamicLoRASchedule:
             # No active LoRAs — disable all
             if hasattr(self.pipeline, "disable_lora"):
                 self.pipeline.disable_lora()
+            else:
+                self.pipeline.set_adapters([], adapter_weights=[])
 
     # ── Visualization ────────────────────────────────────────────────────────
 

@@ -344,11 +344,6 @@ class PhysicsValidator:
 
             reversal_x = dx_prev * dx_next < 0
             reversal_y = dy_prev * dy_next < 0
-            # jitter_mag not used in conditions below, kept for future use
-            jitter_mag = math.sqrt(
-                (traj[i].x - (traj[i-1].x + traj[i+1].x) / 2) ** 2 +
-                (traj[i].y - (traj[i-1].y + traj[i+1].y) / 2) ** 2
-            )
 
             if reversal_x and reversal_y and curr_vel > CAMERA_SHAKE_THRESHOLD_SEVERE:
                 issues.append(PhysicsIssue(
