@@ -149,8 +149,18 @@ Consola durante generación:
 En [vast.ai](https://vast.ai), busca una instancia con:
 - **GPU recomendada:** RTX 4090 (24 GB) · A100 40GB · H100
 - **GPU mínima:** RTX 3090 (24 GB) para CogVideoX, RTX 3080 para LTX
-- **Disco:** ≥ 80 GB
+- **Disco:** ≥ 120 GB (mínimo 80 GB solo para un modelo)
 - **Docker Image:** `pytorch/pytorch:2.4.0-cuda12.1-cudnn9-devel`
+
+> ⚠️ **Espacio en disco estimado:**
+> | Componente | Tamaño |
+> |---|---|
+> | CogVideoX-5B (T2V + V2V) | ~20 GB |
+> | CogVideoX-5B-I2V | ~20 GB |
+> | LTX-Video (T2V + I2V) | ~10 GB |
+> | Sistema + dependencias | ~10 GB |
+> | Outputs + caché LRU | ~20-40 GB |
+> | **Total recomendado** | **≥ 120-150 GB** |
 
 ### 2. Subir archivos y Ejecutar Configuración
 
@@ -160,7 +170,19 @@ cd /workspace/video_gen
 bash setup.sh
 ```
 
-> ℹ️ El script `setup.sh` ahora ejecuta automáticamente `download_models.py`, que pre-descarga CogVideoX-5B, CogVideoX-5B-I2V, LTX-Video y demás modelos al caché de HuggingFace. Si tienes un token de acceso, expórtalo antes:
+> ℹ️ El script `setup.sh` descarga automáticamente el modelo principal (CogVideoX-5B, ~20 GB) usando `--minimal`. Para descargar modelos adicionales:
+> ```bash
+> # Descargar todos los modelos (~50 GB)
+> python download_models.py --all
+>
+> # Descargar modelos específicos
+> python download_models.py --select 1 2 3
+> #   [1] CogVideoX-5B (T2V + V2V)  ~20 GB
+> #   [2] CogVideoX-5B-I2V           ~20 GB  
+> #   [3] LTX-Video (T2V + I2V)      ~10 GB
+> ```
+>
+> Si tienes un token de HuggingFace:
 > ```bash
 > export HF_TOKEN=hf_tu_token_aqui
 > ```

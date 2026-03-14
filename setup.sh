@@ -73,8 +73,16 @@ if [ ! -f /workspace/video_gen/app.py ]; then
 fi
 echo "  ✅ Directorios creados"
 
-# ── 6. Configurar inicio automático ──────────
-echo "[6/6] Configurando servicio de inicio…"
+# ── 6. Descargar modelos ──────────────────────
+echo "[6/7] Descargando modelo principal (CogVideoX-5B)…"
+echo "  ℹ️  Usa --all para descargar todos los modelos (~50 GB)"
+echo "  ℹ️  Disco recomendado: ≥ 120 GB (modelos + outputs + caché)"
+cd /workspace/video_gen
+python download_models.py --minimal
+echo "  ✅ Modelo base descargado"
+
+# ── 7. Configurar inicio automático ──────────
+echo "[7/7] Configurando servicio de inicio…"
 cat > /workspace/start.sh << 'EOF'
 #!/bin/bash
 source /workspace/venv/bin/activate
@@ -83,8 +91,8 @@ cd /workspace/video_gen
 # Si quieres sobreescribirlo en tiempo de ejecución:
 #   export HF_TOKEN=hf_nueva_clave && bash /workspace/start.sh
 
-# Descargar modelos previamente antes de iniciar la app
-python download_models.py
+# Verificar que modelos estén descargados (skip si ya están en caché)
+python download_models.py --minimal
 
 python app.py --share
 EOF
@@ -99,6 +107,15 @@ echo ""
 echo "  Para iniciar la app:"
 echo "    bash /workspace/start.sh"
 echo ""
+echo "  Para descargar TODOS los modelos (~50 GB extra):"
+echo "    python download_models.py --all"
+echo ""
+echo "  Para descargar modelos específicos:"
+echo "    python download_models.py --select 1 2 3"
+echo "      [1] CogVideoX-5B (T2V + V2V) ~20 GB"
+echo "      [2] CogVideoX-5B-I2V          ~20 GB"
+echo "      [3] LTX-Video (T2V + I2V)     ~10 GB"
+echo ""
 echo "  Con link público (Gradio Share):"
 echo "    cd /workspace/video_gen && python app.py --share"
 echo ""
@@ -107,8 +124,11 @@ echo "    cd /workspace/video_gen && python app.py --auth usuario password"
 echo ""
 echo "  Token HuggingFace en tiempo de ejecución:"
 echo "    export HF_TOKEN=hf_xxxxx && python app.py"
-echo "    # O con generate.py:"
-echo "    python generate.py --prompt '...' --hf-token hf_xxxxx"
+echo ""
+echo "  ⚠️  DISCO RECOMENDADO:"
+echo "    • 80 GB  — Solo modelo principal (CogVideoX-5B)"
+echo "    • 120 GB — Todos los modelos"
+echo "    • 150 GB — Todos los modelos + outputs + caché LRU"
 echo ""
 echo "  La UI estará disponible en:"
 echo "    http://<IP_VASTAI>:7860"
