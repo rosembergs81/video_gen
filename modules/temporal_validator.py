@@ -27,6 +27,8 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass, field
 from typing import Optional
+import json
+import os
 
 from modules.action_extractor  import ActionExtractor, ExtractedAction
 from modules.physics_validator import PhysicsValidator, PhysicsReport, PhysicsIssue
@@ -122,6 +124,12 @@ BUILD_UP_REQUIRED: dict[str, tuple[str, int]] = {
 # ─────────────────────────────────────────────────────────────────────────────
 # Validation result models
 # ─────────────────────────────────────────────────────────────────────────────
+
+@dataclass
+class SimpleKeyframe:
+    t_start: float
+    t_end: float
+    description: str
 
 @dataclass
 class ValidationIssue:
@@ -232,6 +240,41 @@ class TemporalCoherenceValidator:
         self._extractor    = ActionExtractor()
         self._physics      = PhysicsValidator(fps=fps, subject_type=subject_type)
         self._custom_rules: list[tuple] = []
+        self._load_rules("temporal_rules.json")
+
+    def _load_rules(self, path: str):
+        default_rules = {
+            "transition_costs": [{"a": k[0], "b": k[1], "frames": v} for k, v in dict(TRANSITION_COSTS).items()],
+            "exclusive_pairs": [list(p) for p in EXCLUSIVE_PAIRS],
+            "prerequisites": PREREQUISITES,
+            "high_inertia_actions": list(HIGH_INERTIA_ACTIONS),
+            "deceleration_frames": DECELERATION_FRAMES,
+            "build_up_required": BUILD_UP_REQUIRED,
+        }
+        
+        if not os.path.exists(path):
+            try:
+                with open(path, "w", encoding="utf-8") as f:
+                    json.dump(default_rules, f, indent=4, ensure_ascii=False)
+            except Exception as e:
+                print(f"[TemporalValidator] Error writing {path}: {e}")
+            self.rules_data = default_rules
+        else:
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    self.rules_data = json.load(f)
+            except Exception as e:
+                print(f"[TemporalValidator] Error reading {path}, using defaults: {e}")
+                self.rules_data = default_rules
+
+        # Re-build fast access structures
+        self.transition_costs = {(item["a"], item["b"]): item["frames"] for item in self.rules_data.get("transition_costs", [])}
+        self.exclusive_pairs = [frozenset(pair) for pair in self.rules_data.get("exclusive_pairs", [])]
+        self.prerequisites = self.rules_data.get("prerequisites", {})
+        self.high_inertia_actions = set(self.rules_data.get("high_inertia_actions", []))
+        self.deceleration_frames = self.rules_data.get("deceleration_frames", {})
+        self.build_up_required = {k: tuple(v) for k, v in self.rules_data.get("build_up_required", {}).items()}
+
 
     # ── Custom rules ──────────────────────────────────────────────────────────
 
@@ -304,7 +347,7 @@ class TemporalCoherenceValidator:
             # Transition cost checks
             for tok_a in tokens_a:
                 for tok_b in tokens_b:
-                    cost = TRANSITION_COSTS.get((tok_a, tok_b), 0)
+                    cost = self.transition_costs.get((tok_a, tok_b), 0)
                     if cost and gap < cost:
                         sem_issues.append(ValidationIssue(
                             severity="error",
@@ -323,7 +366,7 @@ class TemporalCoherenceValidator:
 
             # Exclusive pair checks
             combined = tokens_a & tokens_b if gap == 0 else set()
-            for pair in EXCLUSIVE_PAIRS:
+            for pair in self.exclusive_pairs:
                 if pair.issubset(tokens_a | tokens_b) and gap < 3:
                     a, b = tuple(pair)
                     sem_issues.append(ValidationIssue(
@@ -339,7 +382,7 @@ class TemporalCoherenceValidator:
         seen_verbs: set[str] = set()
         for i, (f, _) in enumerate(sequence):
             for act in kf_actions[i]:
-                prereqs = PREREQUISITES.get(act.verb, [])
+                prereqs = self.prerequisites.get(act.verb, [])
                 for pre in prereqs:
                     if pre not in seen_verbs:
                         sem_issues.append(ValidationIssue(
@@ -385,10 +428,10 @@ class TemporalCoherenceValidator:
             acts_b = {a.verb for a in kf_actions[i + 1]}
 
             # High-inertia → sudden stop
-            for hi_action in HIGH_INERTIA_ACTIONS & acts_a:
+            for hi_action in self.high_inertia_actions & acts_a:
                 stop_states = {"standing", "sitting", "lying_down", "idle"}
                 if acts_b & stop_states:
-                    min_decel = DECELERATION_FRAMES.get(hi_action, 5)
+                    min_decel = self.deceleration_frames.get(hi_action, 5)
                     if gap < min_decel:
                         mom_issues.append(ValidationIssue(
                             severity="warning",
@@ -407,7 +450,7 @@ class TemporalCoherenceValidator:
                         ))
 
             # Build-up checks
-            for action, (prereq, min_build) in BUILD_UP_REQUIRED.items():
+            for action, (prereq, min_build) in self.build_up_required.items():
                 if action in acts_b and prereq not in {a.verb for a in all_actions[:i+1]}:
                     mom_issues.append(ValidationIssue(
                         severity="suggestion",
@@ -443,10 +486,8 @@ class TemporalCoherenceValidator:
 
         # ── 3. Physics validation ─────────────────────────────────────────────
         # Build proper SimpleKeyframe objects that physics_validator can iterate
-        from dataclasses import make_dataclass
-        SimpleKF = make_dataclass("SimpleKF", ["t_start", "t_end", "description"])
         phys_keyframes = [
-            SimpleKF(
+            SimpleKeyframe(
                 t_start=seq[0] / max(total, 1),
                 t_end=(seq[0] + 1) / max(total, 1),
                 description=seq[1],

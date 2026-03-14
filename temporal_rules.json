@@ -1,0 +1,228 @@
+{
+    "transition_costs": [
+        {
+            "a": "jumping",
+            "b": "sitting",
+            "frames": 12
+        },
+        {
+            "a": "jumping",
+            "b": "sleeping",
+            "frames": 30
+        },
+        {
+            "a": "running",
+            "b": "sleeping",
+            "frames": 24
+        },
+        {
+            "a": "running",
+            "b": "sitting",
+            "frames": 8
+        },
+        {
+            "a": "crouching",
+            "b": "jumping",
+            "frames": 4
+        },
+        {
+            "a": "lying_down",
+            "b": "running",
+            "frames": 16
+        },
+        {
+            "a": "lying_down",
+            "b": "jumping",
+            "frames": 20
+        },
+        {
+            "a": "lying_down",
+            "b": "standing",
+            "frames": 10
+        },
+        {
+            "a": "swimming",
+            "b": "running",
+            "frames": 20
+        },
+        {
+            "a": "swimming",
+            "b": "standing",
+            "frames": 15
+        },
+        {
+            "a": "exploding",
+            "b": "standing",
+            "frames": 20
+        },
+        {
+            "a": "exploding",
+            "b": "floating",
+            "frames": 25
+        },
+        {
+            "a": "flying_fast",
+            "b": "landing",
+            "frames": 15
+        },
+        {
+            "a": "falling",
+            "b": "floating",
+            "frames": 10
+        },
+        {
+            "a": "falling",
+            "b": "standing",
+            "frames": 8
+        },
+        {
+            "a": "spinning",
+            "b": "standing",
+            "frames": 6
+        },
+        {
+            "a": "sleeping",
+            "b": "running",
+            "frames": 30
+        },
+        {
+            "a": "sleeping",
+            "b": "jumping",
+            "frames": 35
+        },
+        {
+            "a": "sleeping",
+            "b": "standing",
+            "frames": 12
+        },
+        {
+            "a": "sitting",
+            "b": "running",
+            "frames": 8
+        },
+        {
+            "a": "sitting",
+            "b": "jumping",
+            "frames": 10
+        },
+        {
+            "a": "roaring",
+            "b": "sleeping",
+            "frames": 20
+        },
+        {
+            "a": "roaring",
+            "b": "sitting",
+            "frames": 10
+        },
+        {
+            "a": "grabbing",
+            "b": "throwing",
+            "frames": 4
+        },
+        {
+            "a": "landing",
+            "b": "running",
+            "frames": 6
+        },
+        {
+            "a": "landing",
+            "b": "jumping",
+            "frames": 8
+        }
+    ],
+    "exclusive_pairs": [
+        [
+            "sleeping",
+            "running"
+        ],
+        [
+            "sitting",
+            "jumping"
+        ],
+        [
+            "burning",
+            "swimming"
+        ],
+        [
+            "running",
+            "frozen"
+        ],
+        [
+            "lying_down",
+            "jumping"
+        ],
+        [
+            "exploding",
+            "floating"
+        ],
+        [
+            "flying",
+            "crawling"
+        ],
+        [
+            "lying_down",
+            "standing"
+        ]
+    ],
+    "prerequisites": {
+        "landing": [
+            "jumping",
+            "falling",
+            "flying"
+        ],
+        "catching": [
+            "throwing",
+            "falling"
+        ],
+        "ducking": [
+            "running",
+            "standing"
+        ],
+        "blocking": [
+            "standing"
+        ],
+        "throwing": [
+            "grabbing",
+            "holding"
+        ],
+        "perching": [
+            "flying",
+            "landing"
+        ]
+    },
+    "high_inertia_actions": [
+        "sliding",
+        "running",
+        "falling",
+        "exploding",
+        "spinning",
+        "flying"
+    ],
+    "deceleration_frames": {
+        "running": 6,
+        "flying": 8,
+        "falling": 4,
+        "exploding": 12,
+        "spinning": 5,
+        "sliding": 4
+    },
+    "build_up_required": {
+        "running": [
+            "walking",
+            3
+        ],
+        "jumping": [
+            "crouching",
+            2
+        ],
+        "sprinting": [
+            "running",
+            4
+        ],
+        "exploding": [
+            "standing",
+            1
+        ]
+    }
+}
