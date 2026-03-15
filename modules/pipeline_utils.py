@@ -178,6 +178,51 @@ def get_model_type(model_key: str) -> str:
 # Frames → MP4
 # ─────────────────────────────────────────────────────────────────────────────
 
+def _normalize_frame(frame) -> np.ndarray:
+    """
+    Normalize a single frame to uint8 RGB numpy array.
+    
+    Handles:
+      - PIL.Image → np.array
+      - torch.Tensor → numpy
+      - float [0,1] or [-1,1] → uint8 [0,255]
+      - Already uint8 → passthrough
+    """
+    # Convert PIL to numpy
+    if isinstance(frame, Image.Image):
+        return np.array(frame.convert("RGB"), dtype=np.uint8)
+
+    # Convert torch tensor to numpy
+    if hasattr(frame, 'cpu'):  # torch.Tensor
+        frame = frame.cpu().numpy()
+
+    arr = np.asarray(frame)
+
+    # Handle different dtypes
+    if arr.dtype in (np.float32, np.float64, np.float16):
+        # Detect range
+        vmin, vmax = arr.min(), arr.max()
+        if vmin < -0.5:  # Likely [-1, 1] range
+            arr = ((arr + 1.0) / 2.0 * 255.0)
+        elif vmax <= 1.5:  # Likely [0, 1] range
+            arr = (arr * 255.0)
+        # else: already in ~[0, 255] range
+        arr = np.clip(arr, 0, 255).astype(np.uint8)
+    elif arr.dtype != np.uint8:
+        arr = np.clip(arr, 0, 255).astype(np.uint8)
+
+    # Ensure 3-channel RGB (handle grayscale or RGBA)
+    if arr.ndim == 2:
+        arr = np.stack([arr, arr, arr], axis=-1)
+    elif arr.ndim == 3 and arr.shape[-1] == 4:
+        arr = arr[:, :, :3]
+    elif arr.ndim == 3 and arr.shape[0] == 3:
+        # CHW → HWC
+        arr = np.transpose(arr, (1, 2, 0))
+
+    return arr
+
+
 def frames_to_mp4(
     frames,
     fps: int = 24,
@@ -185,22 +230,8 @@ def frames_to_mp4(
     output_path: str | None = None,
 ) -> str:
     """
-    Write a list of PIL/ndarray frames to an MP4 file.
-
-    Parameters
-    ----------
-    frames : list
-        List of PIL.Image.Image or numpy arrays.
-    fps : int
-        Frames per second.
-    output_dir : str | Path
-        Directory for output file (used when output_path is None).
-    output_path : str | None
-        Explicit output path. If None, generates a UUID-based filename.
-
-    Returns
-    -------
-    str : path to the written MP4 file.
+    Write a list of PIL/ndarray/tensor frames to an MP4 file.
+    Handles normalization from float/tensor to uint8 RGB automatically.
     """
     import imageio
     if output_path is None:
@@ -212,9 +243,8 @@ def frames_to_mp4(
         quality=8, pixelformat="yuv420p",
     )
     for f in frames:
-        if isinstance(f, Image.Image):
-            f = np.array(f)
-        writer.append_data(f)
+        normalized = _normalize_frame(f)
+        writer.append_data(normalized)
     writer.close()
     return output_path
 

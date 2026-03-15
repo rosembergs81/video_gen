@@ -15,7 +15,7 @@ from modules.motion_interpolator import CameraPath
 from modules.lora_scheduler import DynamicLoRASchedule
 from modules.gesture_templates import gesture_to_prompt
 from modules.database import GenerationRecord
-from modules.pipeline_utils import load_pipeline, frames_to_mp4, extract_video_frames
+from modules.pipeline_utils import load_pipeline, frames_to_mp4, extract_video_frames, _normalize_frame
 from modules.cache_manager import segment_cache
 
 _POSITION_MAP = {
@@ -138,7 +138,7 @@ def _run_pipe(pipe, mode, prompt, negative, input_image,
         if not source_frames:
             raise ValueError("No se pudieron extraer frames del video.")
         source_frames = [f.resize((720, 480), Image.LANCZOS) for f in source_frames]
-        return pipe(
+        raw_frames = pipe(
             video=source_frames,
             prompt=prompt, negative_prompt=negative or None,
             num_frames=len(source_frames),
@@ -151,7 +151,7 @@ def _run_pipe(pipe, mode, prompt, negative, input_image,
     elif mode == "t2v":
         w_t2v = (width // 32) * 32
         h_t2v = (height // 32) * 32
-        return pipe(
+        raw_frames = pipe(
             prompt=prompt, negative_prompt=negative or None,
             num_frames=num_frames, guidance_scale=guidance,
             num_inference_steps=steps,
@@ -163,7 +163,7 @@ def _run_pipe(pipe, mode, prompt, negative, input_image,
         is_cogvideox_i2v = pipe.__class__.__name__ == "CogVideoXImageToVideoPipeline"
         if is_cogvideox_i2v:
             img = img.resize((720, 480), Image.LANCZOS)
-            return pipe(
+            raw_frames = pipe(
                 image=img, prompt=prompt, negative_prompt=negative or None,
                 num_frames=num_frames, guidance_scale=guidance,
                 num_inference_steps=steps, generator=gen,
@@ -175,13 +175,25 @@ def _run_pipe(pipe, mode, prompt, negative, input_image,
             w_scaled = max(32, (int(w * sc) // 32) * 32)
             h_scaled = max(32, (int(h * sc) // 32) * 32)
             img = img.resize((w_scaled, h_scaled), Image.LANCZOS)
-            return pipe(
+            raw_frames = pipe(
                 image=img, prompt=prompt, negative_prompt=negative or None,
                 num_frames=num_frames, guidance_scale=guidance,
                 num_inference_steps=steps, generator=gen,
                 height=h_scaled, width=w_scaled,
                 callback_on_step_end=step_callback,
             ).frames[0]
+
+    # ── CRITICAL: Normalize all frames to uint8 PIL Images ──────────────────
+    # The diffusers pipeline may return frames as float tensors [0,1], [-1,1],
+    # or PIL Images depending on the pipeline version and post-processor.
+    # Without normalization, downstream code (MP4 export, crossfade) may receive
+    # corrupt data, producing garbled or black outputs.
+    normalized = []
+    for f in raw_frames:
+        arr = _normalize_frame(f)
+        normalized.append(Image.fromarray(arr))
+    return normalized
+
 
 
 def generate_video(

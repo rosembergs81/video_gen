@@ -441,7 +441,7 @@ def build_ui():
                                 width  = gr.Slider(256, 1280, 720, step=64, label="Ancho px")
                                 height = gr.Slider(256,  720, 480, step=64, label="Alto px")
                             with gr.Row():
-                                guidance = gr.Slider(1.0, 15.0, 6.0, step=0.5,
+                                guidance = gr.Slider(1.0, 15.0, 3.5, step=0.5,
                                                      label="Guidance scale")
                                 steps    = gr.Slider(10, 50, 50, step=5,
                                                      label="Pasos")

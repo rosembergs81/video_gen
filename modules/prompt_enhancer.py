@@ -115,21 +115,28 @@ NEGATIVE_PRESETS = {
     "standard": (
         "blurry, low quality, low resolution, poorly drawn, bad anatomy, "
         "deformed, distorted, disfigured, watermark, text, signature, "
-        "overexposed, underexposed, out of focus, grainy"
+        "overexposed, underexposed, out of focus, grainy, "
+        "extra fingers, mutated hands, missing fingers, extra limbs, "
+        "fused fingers, too many fingers, bad hands, missing arms, "
+        "long neck, cross-eyed, mutation, ugly, cropped"
     ),
     "realistic": (
         "cartoon, anime, illustration, painting, drawing, digital art, "
-        "blurry, low quality, artifacts, watermark, text, unrealistic"
+        "blurry, low quality, artifacts, watermark, text, unrealistic, "
+        "extra fingers, mutated hands, deformed body, bad anatomy, "
+        "missing limbs, extra limbs, fused fingers, bad proportions"
     ),
     "cinematic": (
         "amateur, low budget, poor lighting, bad composition, blurry, "
-        "noise, grain, flickering, interlaced, low resolution, watermark"
+        "noise, grain, flickering, interlaced, low resolution, watermark, "
+        "extra fingers, mutated hands, deformed, bad anatomy, ugly"
     ),
     "animation": (
         "photorealistic, low quality, choppy animation, missing frames, "
-        "inconsistent style, watermark, text, poor detail"
+        "inconsistent style, watermark, text, poor detail, "
+        "extra fingers, mutated hands, deformed, bad anatomy"
     ),
-    "minimal": "blurry, low quality, watermark, text",
+    "minimal": "blurry, low quality, watermark, text, bad anatomy, deformed",
 }
 
 
@@ -165,40 +172,61 @@ class PromptEnhancer:
         genre:          str | None = None,
         extra_tags:     list[str] | None = None,
         auto_context:   bool = True,
+        max_enhancement_tokens: int = 80,
     ) -> str:
-        parts = [base.strip().rstrip(",. ")]
+        """
+        Enhance a base prompt with cinematographic context.
+        
+        IMPORTANT: CogVideoX processes ~226 tokens max. We limit enhancements
+        to avoid overloading the model with conflicting directives.
+        """
+        base_clean = base.strip().rstrip(",. ")
+        parts = [base_clean]
+        enhancement_parts = []
 
-        # Auto-inject based on subject matter
+        # Auto-inject based on subject matter (max 1 to avoid noise)
         if auto_context:
             ctx = self._detect_context(base)
             if ctx:
-                parts.append(ctx)
+                enhancement_parts.append(ctx)
 
-        # Genre template (add before other tags)
+        # Quality booster (highest priority enhancement)
+        if quality and quality in QUALITY_BOOSTERS:
+            enhancement_parts.append(QUALITY_BOOSTERS[quality])
+
+        # Lighting (second priority)
+        if lighting and lighting in LIGHTING_ENHANCERS:
+            enhancement_parts.append(LIGHTING_ENHANCERS[lighting])
+
+        # Genre template (only add motion tag, not all 3 sub-tags)
         if genre and genre in GENRE_TEMPLATES:
             tmpl = GENRE_TEMPLATES[genre]
-            for v in tmpl.values():
-                parts.append(v)
+            # Only add the most impactful tag (motion) to avoid overloading
+            if "motion" in tmpl:
+                enhancement_parts.append(tmpl["motion"])
 
-        # Lighting
-        if lighting and lighting in LIGHTING_ENHANCERS:
-            parts.append(LIGHTING_ENHANCERS[lighting])
-
-        # Cinematography
+        # Cinematography (lower priority — skip if we already have enough)
         if cinematography and cinematography in CINEMATOGRAPHY_ENHANCERS:
-            parts.append(CINEMATOGRAPHY_ENHANCERS[cinematography])
+            enhancement_parts.append(CINEMATOGRAPHY_ENHANCERS[cinematography])
 
-        # Atmosphere
+        # Atmosphere (lowest priority)
         if atmosphere and atmosphere in ATMOSPHERE_ENHANCERS:
-            parts.append(ATMOSPHERE_ENHANCERS[atmosphere])
-
-        # Quality booster
-        if quality and quality in QUALITY_BOOSTERS:
-            parts.append(QUALITY_BOOSTERS[quality])
+            enhancement_parts.append(ATMOSPHERE_ENHANCERS[atmosphere])
 
         # Extra free-form tags
         if extra_tags:
-            parts.extend([t.strip() for t in extra_tags if t.strip()])
+            enhancement_parts.extend([t.strip() for t in extra_tags if t.strip()])
+
+        # Enforce token budget for enhancements
+        total_enhancement = ", ".join(enhancement_parts)
+        enhancement_tokens = len(total_enhancement.split())
+        if enhancement_tokens > max_enhancement_tokens:
+            # Truncate enhancement to budget
+            words = total_enhancement.split()[:max_enhancement_tokens]
+            total_enhancement = " ".join(words)
+
+        if total_enhancement:
+            parts.append(total_enhancement)
 
         return ", ".join(p for p in parts if p)
 
@@ -209,7 +237,7 @@ class PromptEnhancer:
         for pattern, context in SUBJECT_CONTEXTS.items():
             if re.search(pattern, text_lower):
                 detected.append(context)
-        return ", ".join(detected[:2])  # at most 2 auto-contexts
+        return ", ".join(detected[:1])  # at most 1 auto-context to avoid noise
 
     def get_negative(self, preset: str = "standard") -> str:
         return NEGATIVE_PRESETS.get(preset, NEGATIVE_PRESETS["standard"])
