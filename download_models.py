@@ -14,8 +14,10 @@ Espacio en disco estimado:
   • CogVideoX-5B         ~20 GB (T2V + V2V usan el mismo repo)
   • CogVideoX-5B-I2V     ~20 GB
   • LTX-Video            ~10 GB (T2V + I2V usan el mismo repo)
+  • Wan2.1 (T2V)         ~8 GB
+  • HunyuanVideo         ~15 GB (GGUF/Optimizado)
   ─────────────────────────────
-  Total (todos)           ~50 GB en safetensors
+  Total (todos)           ~73 GB en safetensors
   Recomendado disco       ≥ 120 GB (modelos + outputs + caché)
 """
 
@@ -40,6 +42,16 @@ MODEL_REPOS = {
         "repo": "Lightricks/LTX-Video",
         "label": "LTX-Video (T2V + I2V rápido)",
         "size_est": "~10 GB",
+    },
+    4: {
+        "repo": "Wan-AI/Wan2.1-T2V-1.3B-Diffusers",
+        "label": "Wan2.1-T2V-1.3B (Mejor equilibrio calidad/velocidad)",
+        "size_est": "~8 GB",
+    },
+    5: {
+        "repo": "tencent/HunyuanVideo",
+        "label": "HunyuanVideo (Fotorrealismo premium)",
+        "size_est": "~15 GB",
     },
 }
 

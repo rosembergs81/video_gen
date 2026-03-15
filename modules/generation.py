@@ -318,7 +318,7 @@ def generate_video(
         sched.apply_for_frame(mid_frame)
 
         seg_frames = max(8, round((kf.t_end - kf.t_start) * num_frames))
-        if "CogVideoX" in model_key:
+        if any(x in model_key for x in ["CogVideoX", "Wan2.1", "Hunyuan"]):
             seg_frames = (seg_frames // 8) * 8 + 1
 
         try:

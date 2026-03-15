@@ -56,6 +56,16 @@ MODELS: dict[str, dict] = {
         "type":     "i2v",
         "pipeline": "LTXImageToVideoPipeline",
     },
+    "Wan2.1 (T2V)": {
+        "repo":     "Wan-AI/Wan2.1-T2V-1.3B-Diffusers",
+        "type":     "t2v",
+        "pipeline": "WanPipeline",
+    },
+    "HunyuanVideo (T2V)": {
+        "repo":     "tencent/HunyuanVideo",
+        "type":     "t2v",
+        "pipeline": "HunyuanVideoPipeline",
+    },
 }
 
 # CLI-friendly short aliases → full MODELS keys
@@ -65,6 +75,8 @@ MODELS_CLI_ALIASES: dict[str, str] = {
     "cogvideox-v2v": "CogVideoX-5B-V2V (Vid→Vid)",
     "ltx":           "LTX-Video (T2V rápido)",
     "ltx-i2v":       "LTX-Video-I2V (Img→Vid rápido)",
+    "wan":           "Wan2.1 (T2V)",
+    "hunyuan":       "HunyuanVideo (T2V)",
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -77,6 +89,7 @@ def _get_pipeline_cls_map() -> dict:
         CogVideoXPipeline, CogVideoXImageToVideoPipeline,
         CogVideoXVideoToVideoPipeline,
         LTXPipeline, LTXImageToVideoPipeline,
+        WanPipeline, HunyuanVideoPipeline,
     )
     return {
         "CogVideoXPipeline":              CogVideoXPipeline,
@@ -84,6 +97,8 @@ def _get_pipeline_cls_map() -> dict:
         "CogVideoXVideoToVideoPipeline":  CogVideoXVideoToVideoPipeline,
         "LTXPipeline":                    LTXPipeline,
         "LTXImageToVideoPipeline":        LTXImageToVideoPipeline,
+        "WanPipeline":                    WanPipeline,
+        "HunyuanVideoPipeline":           HunyuanVideoPipeline,
     }
 
 # ─────────────────────────────────────────────────────────────────────────────
